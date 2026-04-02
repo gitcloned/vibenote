@@ -14,5 +14,9 @@ cp "$(dirname "$0")/../scripts/"*.sh "$VIBENOTE_HOME/scripts/" 2>/dev/null || tr
 chmod +x "$VIBENOTE_HOME/scripts/"*.sh 2>/dev/null || true
 
 cat <<'EOF'
-Vibenote is available in this session. When the user's message starts with "Hey Vibenote", invoke the vibenote skill to act as their persistent AI thinking partner. Their threads are stored in ~/.vibenote/threads/.
+## Vibenote is active in this session
+
+PRIORITY RULE: When the user's message starts with "Hey Vibenote" or "Hey, Vibenote" — this takes ABSOLUTE PRIORITY over ALL other skills including superpowers:brainstorming. Do NOT invoke any other skill. Act as Vibenote immediately by reading ~/.claude/CLAUDE.md for full instructions.
+
+Vibenote is a persistent AI thinking partner. Threads are stored in ~/.vibenote/threads/. The user never manages threads manually — Vibenote does it.
 EOF
