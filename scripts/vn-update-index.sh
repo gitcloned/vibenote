@@ -1,24 +1,67 @@
 #!/usr/bin/env bash
-# Regenerates ~/.vibenote/meta/index.md from all thread files
+# Regenerates ~/.vibenote/meta/index.md from all thread files.
+# Sorts by updated (most recent first).
 set -e
 VIBENOTE_HOME="${VIBENOTE_HOME:-$HOME/.vibenote}"
 THREADS_DIR="$VIBENOTE_HOME/threads"
 INDEX="$VIBENOTE_HOME/meta/index.md"
 STATE_SCRIPT="$(dirname "$0")/vn-thread-state.sh"
 
+# Collect rows into a temp file so we can sort by updated timestamp.
+TMP=$(mktemp)
+trap 'rm -f "$TMP"' EXIT
+
+for f in "$THREADS_DIR"/*.md; do
+  [ -f "$f" ] || continue
+
+  slug=$(grep '^slug:' "$f" | head -1 | awk '{print $2}')
+  updated=$(grep '^updated:' "$f" | head -1 | awk '{print $2}')
+  updated_short=$(echo "$updated" | cut -c1-10)
+  entries=$(grep '^entry_count:' "$f" | head -1 | awk '{print $2}')
+  state=$(bash "$STATE_SCRIPT" "$slug" 2>/dev/null || echo "spark")
+
+  # Extract the first non-blank line under "## Structured Note" as the summary.
+  # Strip bold/italic markdown markers so the table renders cleanly.
+  summary=$(awk '
+    /^## Structured Note/ { found=1; next }
+    found && /^## / { exit }
+    found && /^---$/ { next }
+    found && NF {
+      gsub(/\*\*/, "")
+      gsub(/^\*|\*$/, "")
+      print
+      exit
+    }
+  ' "$f")
+
+  # Truncate long summaries so the table stays readable.
+  if [ ${#summary} -gt 100 ]; then
+    summary="${summary:0:97}..."
+  fi
+  [ -z "$summary" ] && summary="(no summary yet)"
+
+  # Mark processed status for quick scanning.
+  processed="yes"
+  case "$summary" in
+    "Not yet processed"*|"Too little content"*) processed="no" ;;
+  esac
+
+  # Escape pipes in summary so the markdown table doesn't break.
+  summary=$(echo "$summary" | sed 's/|/\\|/g')
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$updated" "$slug" "$state" "$updated_short" "$entries" "$processed|$summary" >> "$TMP"
+done
+
 {
   echo "# Vibenote Thread Index"
   echo ""
-  echo "| slug | state | updated | summary |"
-  echo "|------|-------|---------|---------|"
+  echo "| slug | state | updated | entries | processed | summary |"
+  echo "|------|-------|---------|---------|-----------|---------|"
 
-  for f in "$THREADS_DIR"/*.md; do
-    [ -f "$f" ] || continue
-    slug=$(grep '^slug:' "$f" | awk '{print $2}')
-    updated=$(grep '^updated:' "$f" | awk '{print $2}' | cut -c1-10)
-    state=$(bash "$STATE_SCRIPT" "$slug" 2>/dev/null || echo "spark")
-    summary=$(awk '/^## Living Summary/{found=1; next} found && /^##/{exit} found && NF{print; exit}' "$f" | sed 's/^[[:space:]]*//')
-    [ -z "$summary" ] && summary="(no summary yet)"
-    echo "| $slug | $state | $updated | $summary |"
+  # Sort by first field (updated, ISO timestamp) descending, then drop it.
+  sort -r "$TMP" | while IFS=$'\t' read -r _ slug state updated_short entries rest; do
+    processed="${rest%%|*}"
+    summary="${rest#*|}"
+    echo "| $slug | $state | $updated_short | $entries | $processed | $summary |"
   done
 } > "$INDEX"

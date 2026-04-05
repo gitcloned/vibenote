@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Vibenote",
+  "version": "0.1.0",
+  "description": "Capture pages, quotes, and thoughts into your local Vibenote vault. Local-only, no cloud.",
+  "permissions": [
+    "sidePanel",
+    "nativeMessaging",
+    "tabs",
+    "storage"
+  ],
+  "action": {
+    "default_title": "Capture to Vibenote"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

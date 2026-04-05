@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Vibenote</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <main>
+    <!-- Page preview card: shows what you're capturing from -->
+    <section class="preview" id="preview">
+      <div class="preview-favicon">
+        <img id="favicon" alt="" width="16" height="16">
+        <div class="preview-favicon-fallback" aria-hidden="true"></div>
+      </div>
+      <div class="preview-text">
+        <div
+          class="preview-title"
+          id="title"
+          contenteditable="true"
+          spellcheck="false"
+          data-placeholder="Page title"></div>
+        <div class="preview-url" id="url" title=""></div>
+      </div>
+    </section>
+
+    <!-- Thread picker -->
+    <section class="field">
+      <label class="field-label" for="thread">Save to</label>
+      <div class="select-wrap">
+        <select id="thread" class="select">
+          <option value="">✨ Auto — let Vibenote decide</option>
+        </select>
+      </div>
+      <div class="field-hint" id="thread-hint"></div>
+    </section>
+
+    <!-- Note textarea -->
+    <section class="field field-grow">
+      <label class="field-label" for="content">Your note</label>
+      <textarea
+        id="content"
+        placeholder="Drop a thought, paste a quote, or anything from the page…"
+        spellcheck="true"
+        autofocus></textarea>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-left">
+      <span class="status" id="status">
+        <span class="status-dot"></span>
+        <span class="status-text">Connecting…</span>
+      </span>
+    </div>
+    <div class="footer-right">
+      <span class="shortcut" id="shortcut"><kbd>⌘</kbd><kbd>↵</kbd></span>
+      <button id="save" class="btn-primary">
+        <span class="btn-label">Capture</span>
+        <span class="btn-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 8l3 3 7-7"/>
+          </svg>
+        </span>
+      </button>
+    </div>
+  </footer>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

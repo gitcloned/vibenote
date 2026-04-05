@@ -2,10 +2,11 @@
 # Uninstalls Vibenote from Claude Code
 set -e
 
-PLUGIN_ROOT="$HOME/.claude/plugins/cache/local/vibenote/1.0.0"
-INSTALLED_JSON="$HOME/.claude/plugins/installed_plugins.json"
-SETTINGS_JSON="$HOME/.claude/settings.json"
-CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+PLUGIN_ROOT="$CLAUDE_DIR/plugins/cache/local/vibenote/1.0.0"
+INSTALLED_JSON="$CLAUDE_DIR/plugins/installed_plugins.json"
+SETTINGS_JSON="$CLAUDE_DIR/settings.json"
+CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 
 echo "Uninstalling Vibenote..."
 

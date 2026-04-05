@@ -4,8 +4,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLUGIN_ROOT="$HOME/.claude/plugins/cache/local/vibenote/1.0.0"
-CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+PLUGIN_ROOT="$CLAUDE_DIR/plugins/cache/local/vibenote/1.0.0"
+CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 SKILL_MD="$SCRIPT_DIR/skills/vibenote/SKILL.md"
 
 # Guard: CLAUDE.md must have the VIBENOTE block (install.sh must have run first)
