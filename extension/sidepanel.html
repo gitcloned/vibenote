@@ -66,30 +66,28 @@
     </section>
   </main>
 
-  <!-- Notes view -->
-  <main class="page" id="page-notes" hidden>
-    <!-- Thread scope selector -->
-    <section class="thread-scope">
-      <label class="field-label" for="ask-thread">Thread</label>
-      <div class="select-wrap">
-        <select id="ask-thread" class="select">
+  <!-- Notes view — chat interface -->
+  <main class="page page-chat" id="page-notes" hidden>
+    <!-- Minimal thread picker -->
+    <div class="chat-scope">
+      <div class="select-wrap select-wrap-compact">
+        <select id="ask-thread" class="select select-compact">
           <option value="">Loading…</option>
         </select>
       </div>
-      <div class="thread-scope-summary" id="thread-scope-summary"></div>
-    </section>
+    </div>
 
-    <!-- Ask box -->
-    <section class="ask-section">
-      <label class="field-label" for="question" id="ask-label">Ask about this thread</label>
-      <textarea
-        id="question"
-        class="ask-input"
-        placeholder="What do you want to know?"
-        spellcheck="true"
-        rows="2"></textarea>
+    <!-- Scrollable message area -->
+    <div class="chat-messages" id="chat-messages">
+      <div class="chat-empty" id="chat-empty">
+        <div class="chat-empty-icon">💭</div>
+        <div class="chat-empty-text">Ask anything about your captured thinking.<br>Try a quick query below.</div>
+      </div>
+    </div>
 
-      <div class="quick-queries" id="quick-queries">
+    <!-- Pinned input bar at bottom -->
+    <div class="chat-input-bar">
+      <div class="chat-chips" id="chat-chips">
         <button class="chip" data-query-type="where-am-i">
           <span class="chip-icon">🧭</span> Where am I
         </button>
@@ -100,37 +98,18 @@
           <span class="chip-icon">🎯</span> Next steps
         </button>
       </div>
-
-      <div class="page-action">
-        <span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd></span>
-        <button id="ask-submit" class="btn-primary">
-          <span class="btn-label">Ask</span>
+      <div class="chat-input-row">
+        <textarea
+          id="question"
+          class="chat-textarea"
+          placeholder="Ask something…"
+          spellcheck="true"
+          rows="1"></textarea>
+        <button id="ask-submit" class="chat-send" title="Send (⌘↵)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
         </button>
       </div>
-    </section>
-
-    <!-- Answer area -->
-    <section class="answer-section" id="answer-section">
-      <div class="answer-empty" id="answer-empty">
-        <div class="answer-empty-icon">💭</div>
-        <div class="answer-empty-text">Ask anything about your captured thinking.<br>Try one of the quick queries above.</div>
-      </div>
-
-      <div class="answer-loading" id="answer-loading" hidden>
-        <div class="spinner"></div>
-        <div class="answer-loading-text">Thinking across your notes…</div>
-      </div>
-
-      <div class="answer-content" id="answer-content" hidden>
-        <div class="answer-meta" id="answer-meta"></div>
-        <div class="answer-body" id="answer-body"></div>
-      </div>
-
-      <div class="answer-error" id="answer-error" hidden>
-        <div class="answer-error-icon">⚠️</div>
-        <div class="answer-error-text" id="answer-error-text"></div>
-      </div>
-    </section>
+    </div>
   </main>
 
   <!-- Global footer: status + config info -->
