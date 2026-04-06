@@ -42,6 +42,7 @@ Run: `cat ~/.vibenote/meta/index.md`
 ```
 ---
 slug: <slug>
+description: <one-sentence description of what this thread is about — maintained by the processor over time>
 created: <timestamp>
 updated: <timestamp>
 entry_count: 1

@@ -15,24 +15,28 @@ for f in "$THREADS_DIR"/*.md; do
   [ -f "$f" ] || continue
 
   slug=$(grep '^slug:' "$f" | head -1 | awk '{print $2}')
+  description=$(grep '^description:' "$f" | head -1 | sed 's/^description: *//')
   updated=$(grep '^updated:' "$f" | head -1 | awk '{print $2}')
   updated_short=$(echo "$updated" | cut -c1-10)
   entries=$(grep '^entry_count:' "$f" | head -1 | awk '{print $2}')
   state=$(bash "$STATE_SCRIPT" "$slug" 2>/dev/null || echo "spark")
 
-  # Extract the first non-blank line under "## Structured Note" as the summary.
-  # Strip bold/italic markdown markers so the table renders cleanly.
-  summary=$(awk '
-    /^## Structured Note/ { found=1; next }
-    found && /^## / { exit }
-    found && /^---$/ { next }
-    found && NF {
-      gsub(/\*\*/, "")
-      gsub(/^\*|\*$/, "")
-      print
-      exit
-    }
-  ' "$f")
+  # Use the description field as the summary. Fall back to structured note
+  # first-line if no description exists (older threads).
+  summary="$description"
+  if [ -z "$summary" ]; then
+    summary=$(awk '
+      /^## Structured Note/ { found=1; next }
+      found && /^## / { exit }
+      found && /^---$/ { next }
+      found && NF {
+        gsub(/\*\*/, "")
+        gsub(/^\*|\*$/, "")
+        print
+        exit
+      }
+    ' "$f")
+  fi
 
   # Truncate long summaries so the table stays readable.
   if [ ${#summary} -gt 100 ]; then

@@ -23,12 +23,14 @@ import re
 import struct
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 VIBENOTE_HOME = Path(os.environ.get("VIBENOTE_HOME", Path.home() / ".vibenote"))
 THREADS_DIR = VIBENOTE_HOME / "threads"
 INDEX_PATH = VIBENOTE_HOME / "meta" / "index.md"
+CONFIG_PATH = VIBENOTE_HOME / "config.json"
 UPDATE_INDEX_SCRIPT = VIBENOTE_HOME / "scripts" / "vn-update-index.sh"
 
 MY_NOTES_PLACEHOLDER = (
@@ -92,10 +94,8 @@ def read_index():
             continue
         if in_table and line.startswith("|"):
             parts = [p.strip() for p in line.strip("|").split("|")]
-            # Header row uses text labels, not slugs — skip it if encountered.
             if not parts or parts[0] in ("slug", ""):
                 continue
-            # Expected columns: slug, state, updated, entries, processed, summary
             if len(parts) >= 6:
                 threads.append({
                     "slug": parts[0],
@@ -106,7 +106,6 @@ def read_index():
                     "summary": parts[5],
                 })
             elif len(parts) >= 4:
-                # Older index format fallback.
                 threads.append({
                     "slug": parts[0],
                     "state": parts[1],
@@ -115,52 +114,124 @@ def read_index():
                     "processed": "",
                     "summary": parts[-1],
                 })
+    # Enrich with descriptions from thread frontmatter (more useful than
+    # index summaries for classification).
+    for t in threads:
+        desc_path = THREADS_DIR / f"{t['slug']}.md"
+        if desc_path.exists():
+            for fline in desc_path.read_text().splitlines():
+                if fline.startswith("description:"):
+                    t["description"] = fline[len("description:"):].strip()
+                    break
     return threads
 
 
-def auto_classify(title, url, threads):
+def llm_classify(title, url, content, threads, claude_bin, claude_dir, timeout=30):
     """
-    Pick the best matching thread based on keyword overlap with thread
-    slugs and summaries. Returns slug or None if no match.
+    Use Claude CLI to classify a capture into one or more threads.
 
-    Scoring: +1 per keyword (>=4 chars) from the title that appears in the
-    thread slug or summary (case-insensitive). Requires at least 1 match.
+    Returns {"threads": ["slug1", ...], "new_thread": null | {slug, title, description}}.
+    Falls back to creating a new thread on any error.
     """
     if not threads:
-        return None
+        return {"threads": [], "new_thread": None}
 
-    # Tokenize the title, keeping only meaningful words.
-    stopwords = {
-        "this", "that", "with", "from", "have", "what", "when", "where",
-        "which", "their", "about", "there", "would", "could", "should",
-        "been", "were", "will", "your", "into", "some", "over", "than",
-        "them", "then", "they", "than", "very", "also", "just", "more",
-        "most", "other", "such", "only", "like", "between",
-    }
-    words = re.findall(r"\b[a-z]{4,}\b", title.lower())
-    keywords = [w for w in words if w not in stopwords]
+    thread_list = "\n".join(
+        f"- {t['slug']}: {t.get('description') or t.get('summary', '(no description)')}"
+        for t in threads
+    )
 
-    best_slug = None
-    best_score = 0
-    for t in threads:
-        haystack = f"{t['slug']} {t.get('summary', '')}".lower()
-        score = sum(1 for kw in keywords if kw in haystack)
-        if score > best_score:
-            best_score = score
-            best_slug = t["slug"]
+    capture_block = f"Title: {title}" if title else ""
+    if url:
+        capture_block += f"\nURL: {url}"
+    if content:
+        # Truncate very long content for the classify prompt — we need intent, not full text.
+        short_content = content[:2000] + ("…" if len(content) > 2000 else "")
+        capture_block += f"\nContent: {short_content}"
 
-    return best_slug if best_score > 0 else None
+    prompt = f"""You are classifying a new capture for a personal knowledge base. Given the existing threads and the new capture, decide where it belongs.
+
+Rules:
+1. A capture can belong to MULTIPLE threads if it genuinely adds value to multiple topics.
+2. Only match threads where the capture is clearly relevant — not just a vague keyword overlap.
+3. If no existing thread is a good match, suggest a new one.
+4. Be conservative: it's better to create a new thread than to misfile.
+
+Existing threads:
+{thread_list}
+
+New capture:
+{capture_block}
+
+Return ONLY a valid JSON object (no markdown fences, no explanation) with these fields:
+- "threads": array of matching thread slugs (can be empty if no match)
+- "new_thread": null if existing threads match, or {{"slug": "...", "title": "...", "description": "..."}} if a new thread should be created
+
+Examples:
+{{"threads": ["slm-optimization-research", "ai-education-research"], "new_thread": null}}
+{{"threads": [], "new_thread": {{"slug": "voice-ux-design", "title": "Voice UX Design", "description": "Design patterns for voice-first user interfaces"}}}}
+{{"threads": ["reading-list"], "new_thread": null}}"""
+
+    env = os.environ.copy()
+    env["CLAUDE_CONFIG_DIR"] = claude_dir
+    extra_paths = [
+        str(Path(claude_bin).parent),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        str(Path.home() / "Library" / "pnpm"),
+        str(Path.home() / ".local" / "bin"),
+    ]
+    env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "/usr/bin:/bin")
+
+    try:
+        result = subprocess.run(
+            [claude_bin, "-p", "--no-session-persistence", "--output-format", "text", "--tools", ""],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+        if result.returncode != 0:
+            print(f"vibenote-bridge: classify LLM error (rc={result.returncode}): {result.stderr[:200]}", file=sys.stderr)
+            return {"threads": [], "new_thread": None}
+
+        raw = result.stdout.strip()
+        # Strip markdown code fences if the model wraps its output.
+        if raw.startswith("```"):
+            raw = "\n".join(raw.split("\n")[1:])
+        if raw.endswith("```"):
+            raw = "\n".join(raw.split("\n")[:-1])
+        raw = raw.strip()
+
+        classification = json.loads(raw)
+        # Validate structure.
+        if not isinstance(classification.get("threads"), list):
+            classification["threads"] = []
+        # Filter to only slugs that actually exist.
+        existing_slugs = {t["slug"] for t in threads}
+        classification["threads"] = [s for s in classification["threads"] if s in existing_slugs]
+        return classification
+
+    except subprocess.TimeoutExpired:
+        print("vibenote-bridge: classify LLM timed out", file=sys.stderr)
+        return {"threads": [], "new_thread": None}
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"vibenote-bridge: classify parse error: {e}", file=sys.stderr)
+        return {"threads": [], "new_thread": None}
 
 
 def thread_path(slug):
     return THREADS_DIR / f"{slug}.md"
 
 
-def create_thread(slug, title):
+def create_thread(slug, title, description=""):
     """Create a new thread file with the standard template."""
     ts = now_iso()
+    desc = description or f"Thread about {title}"
     content = f"""---
 slug: {slug}
+description: {desc}
 created: {ts}
 updated: {ts}
 entry_count: 0
@@ -251,48 +322,396 @@ def handle_list_threads():
     return {"ok": True, "threads": read_index()}
 
 
+# ---------- Config + Ask ----------
+
+def load_config():
+    """Load ~/.vibenote/config.json. Returns a dict of known fields with safe defaults."""
+    defaults = {
+        "claude_config_dir": "~/.claude",
+        "ask": {"timeout_seconds": 45, "model": None},
+    }
+    if not CONFIG_PATH.exists():
+        return defaults
+    try:
+        raw = json.loads(CONFIG_PATH.read_text())
+        defaults["claude_config_dir"] = raw.get("claude_config_dir", defaults["claude_config_dir"])
+        ask = raw.get("ask") or {}
+        defaults["ask"]["timeout_seconds"] = int(ask.get("timeout_seconds", 45))
+        defaults["ask"]["model"] = ask.get("model")
+    except Exception as e:
+        print(f"vibenote-bridge: config.json parse error: {e}", file=sys.stderr)
+    return defaults
+
+
+def expand_path(p):
+    """Expand ~ and $VARS in a path string."""
+    return str(Path(os.path.expandvars(os.path.expanduser(p))))
+
+
+def find_claude_binary():
+    """
+    Find the absolute path to the claude CLI binary.
+
+    Chrome native messaging spawns the bridge with a minimal PATH that usually
+    doesn't include wherever the user installed claude (pnpm, homebrew, etc).
+    Shell aliases don't help because they only exist inside shells. So we look
+    in common install locations and fall back to asking the user's login shell.
+    """
+    candidates = [
+        Path.home() / "Library" / "pnpm" / "claude",      # pnpm global install
+        Path("/opt/homebrew/bin/claude"),                  # Apple Silicon homebrew
+        Path("/usr/local/bin/claude"),                     # Intel homebrew / classic
+        Path.home() / ".local" / "bin" / "claude",         # pipx / per-user install
+        Path.home() / ".claude" / "local" / "bin" / "claude",  # Claude Code self-install
+        Path.home() / "bin" / "claude",                    # user bin convention
+        Path.home() / ".npm" / "bin" / "claude",           # npm global
+        Path.home() / ".volta" / "bin" / "claude",         # volta
+    ]
+    for p in candidates:
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
+
+    # Fall back to asking the user's login shell where claude is. This picks up
+    # PATH additions from .zshrc / .bash_profile that the direct search missed.
+    for shell in ("/bin/zsh", "/bin/bash"):
+        if not Path(shell).exists():
+            continue
+        try:
+            result = subprocess.run(
+                [shell, "-l", "-c", "command -v claude"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                path = result.stdout.strip().split("\n")[-1]
+                if path and Path(path).is_file():
+                    return path
+        except Exception:
+            continue
+    return None
+
+
+def extract_section(text, heading):
+    """Extract the content of a '## Heading' section, stopping at the next '## ' heading."""
+    in_block = False
+    lines = []
+    for line in text.splitlines():
+        if line.startswith(f"## {heading}"):
+            in_block = True
+            continue
+        if in_block and line.startswith("## "):
+            break
+        if in_block:
+            lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def load_all_structured_notes():
+    """
+    Read every thread file and extract its Structured Note section.
+    Returns a list of {slug, structured_note} dicts, skipping threads with
+    unprocessed or empty structured notes.
+    """
+    results = []
+    if not THREADS_DIR.exists():
+        return results
+    for f in sorted(THREADS_DIR.glob("*.md")):
+        slug = f.stem
+        text = f.read_text()
+        note = extract_section(text, "Structured Note")
+        if not note:
+            continue
+        low = note.lower()
+        if low.startswith("*not yet processed") or low.startswith("*too little content"):
+            continue
+        results.append({"slug": slug, "structured_note": note})
+    return results
+
+
+def load_thread_full(slug):
+    """
+    Load a single thread's structured note + full journal for thread-scoped
+    ask queries. Returns {slug, title, structured_note, journal} or None if the
+    thread doesn't exist.
+    """
+    path = THREADS_DIR / f"{slug}.md"
+    if not path.exists():
+        return None
+    text = path.read_text()
+
+    # Extract title from the first '# ' heading after frontmatter.
+    title = slug
+    for line in text.splitlines():
+        if line.startswith("# ") and not line.startswith("## "):
+            title = line[2:].strip()
+            break
+
+    structured = extract_section(text, "Structured Note")
+    journal = extract_section(text, "Journal")
+
+    # Truncate very long journals so we don't blow the context window. Keep the
+    # most recent entries by splitting on '### ' timestamps and taking the tail.
+    MAX_JOURNAL_CHARS = 40000
+    if len(journal) > MAX_JOURNAL_CHARS:
+        entries = re.split(r"(?=^### )", journal, flags=re.MULTILINE)
+        # Keep entries from the end until we're under the limit.
+        kept = []
+        total = 0
+        for entry in reversed(entries):
+            if total + len(entry) > MAX_JOURNAL_CHARS:
+                break
+            kept.append(entry)
+            total += len(entry)
+        journal = "".join(reversed(kept))
+        journal = "(earlier entries omitted for length)\n\n" + journal
+
+    return {
+        "slug": slug,
+        "title": title,
+        "structured_note": structured,
+        "journal": journal,
+    }
+
+
+def build_corpus_prompt(question, notes):
+    """Prompt for corpus-wide ask: uses structured notes from every thread."""
+    if not notes:
+        notes_block = "(vault is empty — no structured notes available)"
+    else:
+        parts = []
+        for n in notes:
+            parts.append(f"=== {n['slug']} ===\n{n['structured_note']}")
+        notes_block = "\n\n".join(parts)
+
+    return f"""You are answering a question from a personal knowledge base. The notes below are synthesized summaries the user has captured from their own thinking across multiple topics.
+
+Rules:
+1. Answer ONLY based on the notes below. Never invent content, never use outside knowledge.
+2. Cite every claim with the thread slug inline, in the format (from <slug>). Use this exact format even when you group the answer by thread with headers — the citations are parsed by the UI to create clickable links.
+3. If the answer isn't in the notes, say so plainly: "Nothing in your notes directly addresses this."
+4. Be concise. 2-4 short paragraphs or a bulleted list. No filler.
+5. Write in a calm, factual tone — you're helping the user recall their own thinking, not selling them anything.
+
+NOTES:
+
+{notes_block}
+
+QUESTION: {question}"""
+
+
+def build_thread_prompt(question, thread):
+    """Prompt for thread-scoped ask: uses one thread's full content (structured note + journal)."""
+    structured = thread["structured_note"] or "(no structured note yet — this thread is unprocessed)"
+    journal = thread["journal"] or "(no journal entries yet)"
+
+    return f"""You are answering a question about a single thread from the user's personal knowledge base. The thread has two parts: a synthesized structured note (the user's current understanding), and a journal of raw captures (the source material).
+
+Rules:
+1. Answer ONLY based on the thread below. Never invent content, never use outside knowledge.
+2. Prefer the structured note for high-level answers ("what have I decided", "what's the current state"). Drill into the journal for specific quotes, sources, or details the structured note doesn't cover.
+3. Cite specific journal entries by their timestamp when you reference them, like (entry from 2026-04-02).
+4. If the answer isn't in the thread, say so plainly: "Nothing in this thread directly addresses that."
+5. Be concise. 2-4 short paragraphs or a bulleted list. No filler.
+6. Write in a calm, factual tone — you're helping the user recall their own thinking, not selling them anything.
+
+THREAD: {thread['title']} (slug: {thread['slug']})
+
+## Structured Note
+{structured}
+
+## Journal
+{journal}
+
+QUESTION: {question}"""
+
+
+def handle_ask(payload):
+    question = (payload.get("question") or "").strip()
+    if not question:
+        return {"ok": False, "error": "Empty question."}
+
+    scope_slug = (payload.get("thread") or "").strip()
+
+    config = load_config()
+    claude_dir = expand_path(config["claude_config_dir"])
+    timeout = config["ask"]["timeout_seconds"]
+    model = config["ask"]["model"]
+
+    # Locate the claude binary. Chrome spawns this bridge with a minimal PATH,
+    # so we have to resolve the absolute path ourselves.
+    claude_bin = find_claude_binary()
+    if not claude_bin:
+        return {
+            "ok": False,
+            "error": "claude CLI not found in common install locations. Make sure Claude Code is installed. If it is, let me know where `which claude` resolves to in your shell.",
+        }
+
+    # Build the prompt based on scope.
+    if scope_slug:
+        thread = load_thread_full(scope_slug)
+        if not thread:
+            return {"ok": False, "error": f"Thread not found: {scope_slug}"}
+        prompt = build_thread_prompt(question, thread)
+        notes_count = 1
+        scope_label = scope_slug
+    else:
+        notes = load_all_structured_notes()
+        prompt = build_corpus_prompt(question, notes)
+        notes_count = len(notes)
+        scope_label = "all threads"
+
+    cmd = [
+        claude_bin,
+        "-p",
+        "--no-session-persistence",
+        "--output-format", "text",
+        "--tools", "",
+    ]
+    if model:
+        cmd.extend(["--model", model])
+
+    # Augment PATH so that anything claude itself shells out to (node, etc.)
+    # resolves correctly even though Chrome gave us a minimal env.
+    env = os.environ.copy()
+    env["CLAUDE_CONFIG_DIR"] = claude_dir
+    extra_paths = [
+        str(Path(claude_bin).parent),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        str(Path.home() / "Library" / "pnpm"),
+        str(Path.home() / ".local" / "bin"),
+    ]
+    env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "/usr/bin:/bin")
+
+    t0 = time.time()
+    try:
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "error": "claude CLI not found. Make sure Claude Code is installed and `claude` is on PATH.",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "error": f"Query timed out after {timeout}s. Try a simpler question or raise ask.timeout_seconds in ~/.vibenote/config.json.",
+        }
+
+    elapsed_ms = int((time.time() - t0) * 1000)
+
+    if result.returncode != 0:
+        stderr_short = (result.stderr or "").strip()[:500]
+        return {
+            "ok": False,
+            "error": f"claude exited with code {result.returncode}: {stderr_short}",
+            "latency_ms": elapsed_ms,
+        }
+
+    answer = (result.stdout or "").strip()
+    if not answer:
+        return {
+            "ok": False,
+            "error": "claude returned an empty response.",
+            "latency_ms": elapsed_ms,
+        }
+
+    # Extract cited slugs from the answer for UI highlighting.
+    cited_slugs = sorted(set(re.findall(r"\(from ([a-z0-9][a-z0-9-]*)\)", answer)))
+
+    return {
+        "ok": True,
+        "answer": answer,
+        "latency_ms": elapsed_ms,
+        "cited_slugs": cited_slugs,
+        "thread_count": notes_count,
+        "scope": scope_label,
+        "scope_slug": scope_slug or None,
+        "claude_config_dir": claude_dir,
+    }
+
+
 def handle_capture(payload):
     title = (payload.get("title") or "").strip()
     url = (payload.get("url") or "").strip()
     body = (payload.get("content") or "").strip()
     requested_thread = (payload.get("thread") or "").strip()
 
-    # Empty body is allowed — this is "bookmark mode" where the user clicks
-    # Capture without typing anything. The resulting entry is just the source
-    # line (title + URL). Must still have a title or URL to identify what
-    # we're bookmarking though.
     if not body and not title and not url:
         return {"ok": False, "error": "Nothing to capture — no title, URL, or content."}
 
+    config = load_config()
+    claude_dir = expand_path(config["claude_config_dir"])
     threads = read_index()
     existing_slugs = {t["slug"] for t in threads}
 
+    filed_to = []       # slugs the entry was filed to
+    created_new = []    # slugs of newly created threads
+
     if requested_thread:
-        slug = requested_thread
-        created_new = slug not in existing_slugs
+        # User explicitly picked a thread — skip LLM, file directly.
+        if requested_thread not in existing_slugs:
+            create_thread(requested_thread, title or requested_thread)
+            created_new.append(requested_thread)
+        append_entry(requested_thread, title, url, body)
+        filed_to.append(requested_thread)
     else:
-        matched = auto_classify(title, url, threads)
-        if matched:
-            slug = matched
-            created_new = False
+        # LLM classification — may return multiple threads.
+        claude_bin = find_claude_binary()
+        if claude_bin:
+            classification = llm_classify(title, url, body, threads, claude_bin, claude_dir)
         else:
-            slug = slugify(title) if title else slugify(url) or f"capture-{now_iso()[:10]}"
-            # Avoid collision with existing slugs.
-            if slug in existing_slugs:
-                slug = f"{slug}-{now_iso()[:10]}"
-            created_new = True
+            # No claude binary — fall back to filing to a new thread.
+            classification = {"threads": [], "new_thread": None}
 
-    if created_new:
-        create_thread(slug, title or slug)
+        matched_slugs = classification.get("threads", [])
+        new_thread_info = classification.get("new_thread")
 
-    append_entry(slug, title, url, body)
+        # File to matched threads.
+        for slug in matched_slugs:
+            append_entry(slug, title, url, body)
+            filed_to.append(slug)
+
+        # If LLM suggested a new thread and no existing match (or in addition).
+        if new_thread_info and isinstance(new_thread_info, dict):
+            new_slug = new_thread_info.get("slug", "")
+            new_title = new_thread_info.get("title", title or new_slug)
+            new_desc = new_thread_info.get("description", "")
+            if new_slug:
+                if new_slug in existing_slugs:
+                    new_slug = f"{new_slug}-{now_iso()[:10]}"
+                create_thread(new_slug, new_title, new_desc)
+                append_entry(new_slug, title, url, body)
+                filed_to.append(new_slug)
+                created_new.append(new_slug)
+
+        # Fallback: if LLM returned nothing useful, create a thread from the title.
+        if not filed_to:
+            fallback_slug = slugify(title) if title else slugify(url) if url else f"capture-{now_iso()[:10]}"
+            if fallback_slug in existing_slugs:
+                fallback_slug = f"{fallback_slug}-{now_iso()[:10]}"
+            create_thread(fallback_slug, title or fallback_slug)
+            append_entry(fallback_slug, title, url, body)
+            filed_to.append(fallback_slug)
+            created_new.append(fallback_slug)
+
     regenerate_index()
 
+    thread_list = ", ".join(filed_to)
+    new_badge = f" (new: {', '.join(created_new)})" if created_new else ""
     return {
         "ok": True,
-        "thread": slug,
+        "threads": filed_to,
         "created_new": created_new,
-        "message": f"Captured to {slug}" + (" (new thread)" if created_new else ""),
+        "thread": filed_to[0] if filed_to else "",  # backward compat
+        "message": f"Captured to {thread_list}{new_badge}",
     }
 
 
@@ -308,8 +727,15 @@ def main():
             send_message(handle_list_threads())
         elif op == "capture":
             send_message(handle_capture(msg))
+        elif op == "ask":
+            send_message(handle_ask(msg))
         elif op == "ping":
-            send_message({"ok": True, "vault": str(VIBENOTE_HOME)})
+            cfg = load_config()
+            send_message({
+                "ok": True,
+                "vault": str(VIBENOTE_HOME),
+                "claude_config_dir": expand_path(cfg["claude_config_dir"]),
+            })
         else:
             send_message({"ok": False, "error": f"Unknown op: {op}"})
     except Exception as e:
