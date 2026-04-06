@@ -4,6 +4,8 @@ set -e
 VIBENOTE_HOME="${VIBENOTE_HOME:-$HOME/.vibenote}"
 
 mkdir -p "$VIBENOTE_HOME/threads"
+mkdir -p "$VIBENOTE_HOME/concepts"
+mkdir -p "$VIBENOTE_HOME/concepts/archived"
 mkdir -p "$VIBENOTE_HOME/meta"
 mkdir -p "$VIBENOTE_HOME/scripts"
 

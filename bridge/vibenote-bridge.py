@@ -29,7 +29,9 @@ from pathlib import Path
 
 VIBENOTE_HOME = Path(os.environ.get("VIBENOTE_HOME", Path.home() / ".vibenote"))
 THREADS_DIR = VIBENOTE_HOME / "threads"
+CONCEPTS_DIR = VIBENOTE_HOME / "concepts"
 INDEX_PATH = VIBENOTE_HOME / "meta" / "index.md"
+USAGE_LOG_PATH = VIBENOTE_HOME / "meta" / "usage.log"
 CONFIG_PATH = VIBENOTE_HOME / "config.json"
 UPDATE_INDEX_SCRIPT = VIBENOTE_HOME / "scripts" / "vn-update-index.sh"
 
@@ -63,6 +65,21 @@ def send_message(payload):
 
 def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def log_usage(op, **kwargs):
+    """Append a one-line entry to the usage log. Fire-and-forget — never fails the caller."""
+    try:
+        parts = [f"{now_iso()} op={op}"]
+        for k, v in kwargs.items():
+            if v is not None:
+                parts.append(f"{k}={v}")
+        line = " ".join(parts) + "\n"
+        USAGE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(USAGE_LOG_PATH, "a") as f:
+            f.write(line)
+    except Exception:
+        pass  # never let logging break the operation
 
 
 def slugify(title):
@@ -318,8 +335,432 @@ def regenerate_index():
 
 # ---------- Operation handlers ----------
 
+def compute_strength(concept, notes):
+    """
+    Compute concept strength using recency-weighted substantiveness.
+    strength = Σ substantiveness(thread) × e^(-0.03 × days_since_updated)
+    """
+    import math
+    now_epoch = time.time()
+    total = 0.0
+    subs = concept.get("substantiveness", {})
+    for note in notes:
+        slug = note["slug"]
+        if slug not in [t for t in concept.get("threads", [])]:
+            continue
+        # Get the thread's updated timestamp from its file
+        thread_file = THREADS_DIR / f"{slug}.md"
+        days = 0
+        if thread_file.exists():
+            for line in thread_file.read_text().splitlines():
+                if line.startswith("updated:"):
+                    ts_str = line.split(":", 1)[1].strip()
+                    try:
+                        from datetime import datetime as dt
+                        updated = dt.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        days = (datetime.now(timezone.utc) - updated).days
+                    except Exception:
+                        pass
+                    break
+        sub_score = float(subs.get(slug, 0.5))
+        decay = math.exp(-0.03 * days)
+        total += sub_score * decay
+    return round(total, 3)
+
+
+def run_claude(prompt, claude_bin, claude_dir, timeout=45):
+    """Run claude -p and return the raw text output. Returns None on any error."""
+    env = os.environ.copy()
+    env["CLAUDE_CONFIG_DIR"] = claude_dir
+    extra_paths = [
+        str(Path(claude_bin).parent),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        str(Path.home() / "Library" / "pnpm"),
+        str(Path.home() / ".local" / "bin"),
+    ]
+    env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "/usr/bin:/bin")
+
+    try:
+        result = subprocess.run(
+            [claude_bin, "-p", "--no-session-persistence", "--output-format", "text", "--tools", ""],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+        if result.returncode != 0:
+            print(f"vibenote-bridge: claude error (rc={result.returncode}): {result.stderr[:200]}", file=sys.stderr)
+            return None
+        return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        print("vibenote-bridge: claude timed out", file=sys.stderr)
+        return None
+    except FileNotFoundError:
+        print("vibenote-bridge: claude binary not found", file=sys.stderr)
+        return None
+
+
+def parse_json_from_llm(raw):
+    """Parse JSON from LLM output, stripping markdown code fences if present."""
+    if not raw:
+        return None
+    text = raw.strip()
+    if text.startswith("```"):
+        text = "\n".join(text.split("\n")[1:])
+    if text.endswith("```"):
+        text = "\n".join(text.split("\n")[:-1])
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        print(f"vibenote-bridge: JSON parse error: {e}", file=sys.stderr)
+        return None
+
+
+def extract_concepts(notes, claude_bin, claude_dir, timeout=60):
+    """
+    Use the LLM to identify concepts that span 2+ threads.
+    Returns a list of concept dicts: [{slug, description, threads, substantiveness}]
+    """
+    notes_block = "\n\n".join(
+        f"=== {n['slug']} ===\n{n['structured_note']}"
+        for n in notes
+    )
+
+    prompt = f"""You are analyzing a personal knowledge base to find concepts that span multiple threads. A "concept" is an idea, framework, technique, or theme that appears meaningfully in 2 or more threads.
+
+Rules:
+1. Only extract concepts that appear SUBSTANTIVELY in 2+ threads — not just keyword overlap.
+2. Each concept should be atomic (one idea per concept, not a category).
+3. For each concept, rate substantiveness per thread: 1.0 = core topic, 0.5 = discussed significantly, 0.3 = mentioned but not central.
+4. Generate a slug (lowercase, hyphenated), a one-sentence description, and list which threads reference it.
+5. Aim for quality over quantity — 3 genuine cross-thread concepts are better than 10 superficial ones.
+6. Look for non-obvious connections — concepts that the user might not realize connect their threads.
+
+THREADS:
+
+{notes_block}
+
+Return ONLY a valid JSON array (no markdown fences, no explanation):
+[
+  {{
+    "slug": "concept-slug",
+    "title": "Concept Title",
+    "description": "One-sentence description of what this concept is",
+    "threads": ["thread-slug-1", "thread-slug-2"],
+    "substantiveness": {{"thread-slug-1": 1.0, "thread-slug-2": 0.5}},
+    "connections_insight": "One sentence about what's interesting about how this concept appears differently across the threads"
+  }}
+]"""
+
+    raw = run_claude(prompt, claude_bin, claude_dir, timeout)
+    data = parse_json_from_llm(raw)
+    if not isinstance(data, list):
+        return []
+
+    # Validate: only keep concepts with 2+ threads that actually exist
+    existing_slugs = {n["slug"] for n in notes}
+    valid = []
+    for c in data:
+        if not isinstance(c, dict):
+            continue
+        threads = [t for t in c.get("threads", []) if t in existing_slugs]
+        if len(threads) < 2:
+            continue
+        c["threads"] = threads
+        valid.append(c)
+    return valid
+
+
+def generate_concept_page(concept, notes, claude_bin, claude_dir, timeout=45):
+    """
+    Generate a full concept page for a single concept.
+    Returns the markdown string to write to the concept file.
+    """
+    slug = concept["slug"]
+    title = concept.get("title", slug)
+    description = concept.get("description", "")
+    threads = concept.get("threads", [])
+    substantiveness = concept.get("substantiveness", {})
+    insight = concept.get("connections_insight", "")
+
+    # Collect the relevant structured notes
+    relevant_notes = "\n\n".join(
+        f"=== {n['slug']} ===\n{n['structured_note']}"
+        for n in notes if n["slug"] in threads
+    )
+
+    prompt = f"""You are generating a concept page for a personal knowledge base. This concept spans multiple threads. Your job is to SYNTHESIZE — not just list where the concept appears, but generate genuine understanding about how the concept manifests differently across the threads and what connections that reveals.
+
+CONCEPT: {title}
+DESCRIPTION: {description}
+APPEARS IN: {', '.join(threads)}
+CONNECTION INSIGHT: {insight}
+
+RELEVANT THREAD NOTES:
+
+{relevant_notes}
+
+Write the concept page body with these sections (markdown, no frontmatter — I'll add that separately):
+
+## What I know
+A synthesis (3-5 paragraphs) of what the user understands about this concept ACROSS all referencing threads. Not a thread-by-thread summary. A genuine multi-perspective synthesis that generates understanding neither thread provides alone. Highlight non-obvious connections.
+
+## Where it appears
+For each referencing thread, 1-2 sentences about HOW that thread discusses this concept — what angle, what context, what's specific to that thread's framing.
+
+## Open questions
+Questions about this concept that span threads or aren't answered in any single thread. These should be the kind of questions that only become visible when you see the concept from multiple angles.
+
+## Connections
+Related concepts (as [[wikilinks]]). Tensions or synergies with other ideas in the vault.
+
+Be concise. Write in the user's voice — calm, factual, no filler. Every sentence should earn its place."""
+
+    raw = run_claude(prompt, claude_bin, claude_dir, timeout)
+    if not raw:
+        return None
+
+    # Compute strength
+    strength = compute_strength(concept, notes)
+
+    # Build the full page with frontmatter
+    threads_yaml = "\n".join(f"  - {t}" for t in threads)
+    subs_yaml = "\n".join(f"  {t}: {substantiveness.get(t, 0.5)}" for t in threads)
+
+    page = f"""---
+slug: {slug}
+type: concept
+description: {description}
+threads:
+{threads_yaml}
+strength: {strength}
+substantiveness:
+{subs_yaml}
+first_seen: {now_iso()}
+last_updated: {now_iso()}
+last_accessed: null
+state: active
+---
+
+# {title}
+
+{raw}
+"""
+    return page
+
+
+def generate_concept_index():
+    """Generate concepts/index.md from all active concept pages."""
+    if not CONCEPTS_DIR.exists():
+        return
+
+    lines = ["# Vibenote Concept Index", "", "| concept | description | threads | strength | state |",
+             "|---------|-------------|---------|----------|-------|"]
+
+    for f in sorted(CONCEPTS_DIR.glob("*.md")):
+        if f.name == "index.md":
+            continue
+        text = f.read_text()
+        meta = {}
+        in_fm = False
+        for line in text.splitlines():
+            if line.strip() == "---":
+                if in_fm:
+                    break
+                in_fm = True
+                continue
+            if in_fm and ":" in line and not line.startswith("  "):
+                key, _, val = line.partition(":")
+                meta[key.strip()] = val.strip()
+
+        slug = meta.get("slug", f.stem)
+        desc = meta.get("description", "")
+        if len(desc) > 80:
+            desc = desc[:77] + "..."
+        strength = meta.get("strength", "0")
+        state = meta.get("state", "active")
+        # Count threads from YAML list
+        thread_count = sum(1 for l in text.splitlines() if l.strip().startswith("- ") and l.strip()[2:].replace("-", "").isalpha())
+
+        lines.append(f"| [[{slug}]] | {desc} | {thread_count} | {strength} | {state} |")
+
+    (CONCEPTS_DIR / "index.md").write_text("\n".join(lines) + "\n")
+
+
+def insert_wikilinks(concepts_data):
+    """
+    Insert [[concept]] wikilinks into structured notes where concepts are mentioned.
+    Only modifies the Structured Note section — never touches My Notes or Journal.
+    """
+    if not concepts_data:
+        return
+
+    for f in sorted(THREADS_DIR.glob("*.md")):
+        slug = f.stem
+        text = f.read_text()
+
+        # Find which concepts reference this thread
+        relevant_concepts = [
+            c for c in concepts_data
+            if slug in c.get("threads", [])
+        ]
+        if not relevant_concepts:
+            continue
+
+        # Extract the structured note section
+        lines = text.splitlines()
+        sn_start = None
+        sn_end = None
+        for i, line in enumerate(lines):
+            if line.startswith("## Structured Note"):
+                sn_start = i
+            elif sn_start is not None and line.startswith("## ") and i > sn_start:
+                sn_end = i
+                break
+        if sn_start is None:
+            continue
+        if sn_end is None:
+            sn_end = len(lines)
+
+        # Get the structured note text
+        sn_text = "\n".join(lines[sn_start:sn_end])
+
+        # Insert wikilinks — replace the concept title/slug with [[slug|Title]]
+        # Only do this if the link doesn't already exist
+        modified = False
+        for concept in relevant_concepts:
+            c_slug = concept["slug"]
+            c_title = concept.get("title", c_slug)
+            wikilink = f"[[{c_slug}|{c_title}]]"
+
+            # Skip if already linked
+            if f"[[{c_slug}" in sn_text:
+                continue
+
+            # Try to find the concept title or slug in the text and wrap it
+            # Be careful: only replace the first occurrence, and only in running text
+            # (not in headings or frontmatter-like lines)
+            for target in [c_title, c_slug.replace("-", " ").title(), c_slug]:
+                if target in sn_text and f"[[{c_slug}" not in sn_text:
+                    # Replace first occurrence only
+                    sn_text = sn_text.replace(target, wikilink, 1)
+                    modified = True
+                    break
+
+            # If no text match found, append a reference line at the end of the section
+            if f"[[{c_slug}" not in sn_text:
+                sn_text = sn_text.rstrip() + f"\n\n*Related concepts: {wikilink}*"
+                modified = True
+
+        if modified:
+            # Reconstruct the file with the modified structured note
+            new_lines = lines[:sn_start] + sn_text.splitlines() + lines[sn_end:]
+            f.write_text("\n".join(new_lines))
+
+
 def handle_list_threads():
     return {"ok": True, "threads": read_index()}
+
+
+def handle_list_concepts():
+    """Return the list of active concept pages from the concepts directory."""
+    concepts = []
+    if not CONCEPTS_DIR.exists():
+        return {"ok": True, "concepts": concepts}
+    for f in sorted(CONCEPTS_DIR.glob("*.md")):
+        if f.name == "index.md":
+            continue
+        text = f.read_text()
+        meta = {}
+        for line in text.splitlines():
+            if line == "---":
+                if meta:
+                    break
+                continue
+            if ":" in line:
+                key, _, val = line.partition(":")
+                meta[key.strip()] = val.strip()
+        concepts.append({
+            "slug": meta.get("slug", f.stem),
+            "description": meta.get("description", ""),
+            "strength": float(meta.get("strength", "0")),
+            "state": meta.get("state", "active"),
+            "threads": [t.strip() for t in meta.get("threads", "").strip("[]").split(",") if t.strip()],
+        })
+    return {"ok": True, "concepts": concepts}
+
+
+def handle_process_concepts(payload):
+    """
+    Extract concepts from all structured notes and generate/update concept pages.
+    This is the core cross-references engine.
+    """
+    config = load_config()
+    claude_dir = expand_path(config["claude_config_dir"])
+    timeout = config["ask"]["timeout_seconds"]
+
+    claude_bin = find_claude_binary()
+    if not claude_bin:
+        return {"ok": False, "error": "claude CLI not found."}
+
+    # Step 1: Load all structured notes
+    notes = load_all_structured_notes()
+    if len(notes) < 2:
+        return {
+            "ok": True,
+            "message": "Need at least 2 threads with structured notes for concept extraction.",
+            "concepts_generated": 0,
+            "concepts_updated": 0,
+        }
+
+    # Step 2: Extract concepts via LLM
+    concepts_data = extract_concepts(notes, claude_bin, claude_dir, timeout)
+    if not concepts_data:
+        return {
+            "ok": True,
+            "message": "No cross-thread concepts found.",
+            "concepts_generated": 0,
+            "concepts_updated": 0,
+        }
+
+    # Step 3: Generate concept pages
+    CONCEPTS_DIR.mkdir(parents=True, exist_ok=True)
+    generated = 0
+    updated = 0
+    for concept in concepts_data:
+        slug = concept.get("slug", "")
+        if not slug:
+            continue
+        page_path = CONCEPTS_DIR / f"{slug}.md"
+        is_new = not page_path.exists()
+
+        # Generate the full concept page via LLM
+        page_content = generate_concept_page(concept, notes, claude_bin, claude_dir, timeout)
+        if page_content:
+            page_path.write_text(page_content)
+            if is_new:
+                generated += 1
+            else:
+                updated += 1
+
+    # Step 4: Generate concept index
+    generate_concept_index()
+
+    # Step 5: Insert wikilinks into structured notes
+    insert_wikilinks(concepts_data)
+
+    regenerate_index()
+
+    return {
+        "ok": True,
+        "message": f"Processed {len(concepts_data)} concepts ({generated} new, {updated} updated).",
+        "concepts_generated": generated,
+        "concepts_updated": updated,
+        "concepts": [c.get("slug") for c in concepts_data],
+    }
 
 
 # ---------- Config + Ask ----------
@@ -561,65 +1002,14 @@ def handle_ask(payload):
         notes_count = len(notes)
         scope_label = "all threads"
 
-    cmd = [
-        claude_bin,
-        "-p",
-        "--no-session-persistence",
-        "--output-format", "text",
-        "--tools", "",
-    ]
-    if model:
-        cmd.extend(["--model", model])
-
-    # Augment PATH so that anything claude itself shells out to (node, etc.)
-    # resolves correctly even though Chrome gave us a minimal env.
-    env = os.environ.copy()
-    env["CLAUDE_CONFIG_DIR"] = claude_dir
-    extra_paths = [
-        str(Path(claude_bin).parent),
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        str(Path.home() / "Library" / "pnpm"),
-        str(Path.home() / ".local" / "bin"),
-    ]
-    env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "/usr/bin:/bin")
-
     t0 = time.time()
-    try:
-        result = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-    except FileNotFoundError:
-        return {
-            "ok": False,
-            "error": "claude CLI not found. Make sure Claude Code is installed and `claude` is on PATH.",
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "error": f"Query timed out after {timeout}s. Try a simpler question or raise ask.timeout_seconds in ~/.vibenote/config.json.",
-        }
-
+    answer = run_claude(prompt, claude_bin, claude_dir, timeout)
     elapsed_ms = int((time.time() - t0) * 1000)
 
-    if result.returncode != 0:
-        stderr_short = (result.stderr or "").strip()[:500]
-        return {
-            "ok": False,
-            "error": f"claude exited with code {result.returncode}: {stderr_short}",
-            "latency_ms": elapsed_ms,
-        }
-
-    answer = (result.stdout or "").strip()
     if not answer:
         return {
             "ok": False,
-            "error": "claude returned an empty response.",
+            "error": "claude returned no response. Check that Claude Code is running and authenticated.",
             "latency_ms": elapsed_ms,
         }
 
@@ -723,14 +1113,38 @@ def main():
         if msg is None:
             return
         op = msg.get("op")
+        t0 = time.time()
+
         if op == "list-threads":
-            send_message(handle_list_threads())
+            result = handle_list_threads()
+            log_usage(op, thread_count=len(result.get("threads", [])))
+            send_message(result)
         elif op == "capture":
-            send_message(handle_capture(msg))
+            result = handle_capture(msg)
+            threads = ",".join(result.get("threads", []))
+            log_usage(op, threads=threads or result.get("thread"),
+                      latency_ms=int((time.time() - t0) * 1000))
+            send_message(result)
         elif op == "ask":
-            send_message(handle_ask(msg))
+            result = handle_ask(msg)
+            scope = msg.get("thread") or "all"
+            log_usage(op, scope=f"thread:{scope}" if msg.get("thread") else "all",
+                      latency_ms=result.get("latency_ms"),
+                      cited=",".join(result.get("cited_slugs", [])))
+            send_message(result)
+        elif op == "list-concepts":
+            result = handle_list_concepts()
+            log_usage(op, concept_count=len(result.get("concepts", [])))
+            send_message(result)
+        elif op == "process-concepts":
+            result = handle_process_concepts(msg)
+            log_usage(op, latency_ms=int((time.time() - t0) * 1000),
+                      generated=result.get("concepts_generated"),
+                      updated=result.get("concepts_updated"))
+            send_message(result)
         elif op == "ping":
             cfg = load_config()
+            log_usage(op)
             send_message({
                 "ok": True,
                 "vault": str(VIBENOTE_HOME),
