@@ -585,9 +585,15 @@ def generate_concept_page(concept, notes, claude_bin, claude_dir, timeout=45, co
 
     journal_refs_block = "\n".join(journal_refs) if journal_refs else "(no journal entries available)"
 
-    prompt = f"""You are writing a concept page for someone's personal knowledge base. This concept connects multiple threads of their thinking. Your job: synthesize what they know into a page that sounds like it was written by a sharp, thoughtful friend — not an AI assistant.
+    prompt = f"""You are writing a concept card for someone's personal knowledge base. A concept card is SHORT — like a brain's compressed memory of a pattern, not an essay. Think index card, not research paper.
 
-PERSONA: You're a friend who's been reading all their notes and just noticed something they missed. You think out loud. You make direct connections without hedging. You use "you" and "your." You don't say "both domains converge" — you say "this is the same problem showing up in two places." You're concise and opinionated. No filler, no academic framing, no "it appears that."
+RULES:
+- The ENTIRE body (excluding frontmatter) should be 8-15 lines max. Not paragraphs — lines.
+- Name the pattern in 2-3 sentences. Be direct and opinionated. "This is the same problem as..." not "Both domains appear to converge..."
+- Use "you" and "your." No academic voice.
+- One key tension or open question — the single most interesting one, not a list of five.
+- Links as pointers, not prose. No "Where it appears" section — the thread links make that obvious.
+- Cite sources as one-line references, not summaries.
 
 CONCEPT: {title}
 DESCRIPTION: {description}
@@ -595,33 +601,26 @@ APPEARS IN: {', '.join(threads)}
 CONNECTION INSIGHT: {insight}
 
 RELEVANT THREAD NOTES:
-
 {relevant_notes}
 
-JOURNAL ENTRIES (cite specific entries using the format "(thread-slug, YYYY-MM-DD)"):
-
+JOURNAL ENTRIES (cite as "(thread-slug, YYYY-MM-DD)"):
 {journal_refs_block}
 
-OTHER CONCEPTS THAT EXIST (only link to these — don't invent wikilinks to concepts that don't exist):
+OTHER CONCEPTS THAT EXIST (only link to these):
 {existing_concepts_hint}
 
-Write the concept page body with these sections (markdown, no frontmatter):
+Write the concept card body (markdown, no frontmatter). Structure:
 
-## What I know
-3-5 paragraphs synthesizing what YOU (the user) understand about this concept across your threads. Not a thread-by-thread summary — a genuine synthesis that generates connections neither thread makes alone. Write conversationally. Cite specific journal entries inline as (thread-slug, YYYY-MM-DD). Make bold connections. Say "this is basically the same thing as" when it is.
+# {title}
 
-## Where it appears
-For each thread, 1-2 sentences about what angle that thread takes on this concept.
+2-3 sentences naming the pattern — the compressed insight that connects the threads. Bold, direct, no hedging. Cite entries inline.
 
-## Open questions
-Questions that only become visible when you see this concept from multiple angles. Frame them as things the user might actually want to investigate next.
+**Tension:** One sentence — the key unresolved question this concept surfaces.
 
-## Connections
-ONLY link to concepts from this list: {existing_concepts_hint}. Format: [[slug|Display Name]]. If no existing concepts relate, write "No linked concepts yet — this will grow as your vault grows." Do NOT invent wikilinks to concepts that don't exist.
+**Open:** One actionable next question for the user.
 
-## Sources
-List the specific journal entries this page draws from. Format:
-- thread-slug, YYYY-MM-DD — one-line summary of what that entry contributes"""
+→ [[thread-links]] · [[concept-links]]
+Sources: thread-slug (YYYY-MM-DD) · thread-slug (YYYY-MM-DD)"""
 
     raw = run_claude(prompt, claude_bin, claude_dir, timeout)
     if not raw:
@@ -652,8 +651,6 @@ last_updated: {now_iso()}
 last_accessed: null
 state: active
 ---
-
-# {title}
 
 {raw}
 """
