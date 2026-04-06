@@ -38,6 +38,7 @@ const els = {
 
 let currentDraftUrl = '';
 let cachedThreads = [];
+let cachedConcepts = [];
 let activeTab = 'capture';
 let currentAnswerState = 'empty'; // 'empty' | 'loading' | 'content' | 'error'
 let vaultPath = '';
@@ -169,10 +170,22 @@ function populateThreads(threads) {
   populateAskThread(threads);
 }
 
+async function loadConcepts() {
+  try {
+    const response = await callBridge({ op: 'list-concepts' });
+    if (response && response.ok) {
+      cachedConcepts = (response.concepts || []).filter((c) => c.state !== 'archived');
+    }
+  } catch (err) {
+    console.error('Vibenote: list-concepts failed', err);
+    cachedConcepts = [];
+  }
+}
+
 function populateAskThread(threads) {
   els.askThread.innerHTML = '';
 
-  if (threads.length === 0) {
+  if (threads.length === 0 && cachedConcepts.length === 0) {
     const opt = document.createElement('option');
     opt.value = '';
     opt.textContent = 'No threads yet — capture something first';
@@ -182,18 +195,41 @@ function populateAskThread(threads) {
     return;
   }
 
-  // Threads sorted by updated desc (the index already returns them this way)
-  for (const t of threads) {
-    const opt = document.createElement('option');
-    opt.value = t.slug;
-    opt.textContent = t.slug;
-    opt.dataset.summary = t.summary || '';
-    opt.dataset.entries = t.entries || '';
-    opt.dataset.updated = t.updated || '';
-    els.askThread.appendChild(opt);
+  // Threads section
+  if (threads.length > 0) {
+    const threadHeader = document.createElement('optgroup');
+    threadHeader.label = 'Threads';
+    for (const t of threads) {
+      const opt = document.createElement('option');
+      opt.value = `thread:${t.slug}`;
+      opt.textContent = t.slug;
+      opt.dataset.summary = t.summary || '';
+      opt.dataset.entries = t.entries || '';
+      opt.dataset.updated = t.updated || '';
+      opt.dataset.scopeType = 'thread';
+      threadHeader.appendChild(opt);
+    }
+    els.askThread.appendChild(threadHeader);
   }
 
-  // "All threads" escape hatch at the bottom
+  // Concepts section
+  if (cachedConcepts.length > 0) {
+    const conceptHeader = document.createElement('optgroup');
+    conceptHeader.label = 'Concepts';
+    for (const c of cachedConcepts) {
+      const opt = document.createElement('option');
+      opt.value = `concept:${c.slug}`;
+      const strength = c.strength ? ` (${c.strength.toFixed(1)})` : '';
+      opt.textContent = `${c.slug}${strength}`;
+      opt.dataset.summary = c.description || '';
+      opt.dataset.scopeType = 'concept';
+      opt.dataset.threadCount = (c.threads || []).length;
+      conceptHeader.appendChild(opt);
+    }
+    els.askThread.appendChild(conceptHeader);
+  }
+
+  // "All threads" escape hatch
   const divider = document.createElement('option');
   divider.disabled = true;
   divider.textContent = '──────────';
@@ -204,38 +240,52 @@ function populateAskThread(threads) {
   allOpt.textContent = '— All threads —';
   els.askThread.appendChild(allOpt);
 
-  // Default to most-recently-updated (first in the list)
-  els.askThread.value = threads[0].slug;
+  // Default to most-recently-updated thread
+  if (threads.length > 0) {
+    els.askThread.value = `thread:${threads[0].slug}`;
+  }
   updateAskScope();
+}
+
+function parseScope(value) {
+  if (!value || value === '__all__') return { type: 'all', slug: null };
+  if (value.startsWith('thread:')) return { type: 'thread', slug: value.slice(7) };
+  if (value.startsWith('concept:')) return { type: 'concept', slug: value.slice(8) };
+  return { type: 'thread', slug: value }; // fallback
 }
 
 function updateAskScope() {
   const selected = els.askThread.value;
   const option = els.askThread.selectedOptions[0];
+  const scope = parseScope(selected);
 
-  if (selected === '__all__') {
+  if (scope.type === 'all') {
     els.askLabel.textContent = 'Ask across all threads';
     els.question.placeholder = 'What do you want to know across everything?';
-    els.threadScopeSummary.textContent = `Searching all ${cachedThreads.length} threads.`;
-  } else if (selected && option) {
+    els.threadScopeSummary.textContent = `Searching all ${cachedThreads.length} threads and ${cachedConcepts.length} concepts.`;
+  } else if (scope.type === 'concept') {
+    els.askLabel.textContent = 'Ask about this concept';
+    els.question.placeholder = `What do you want to know about ${scope.slug}?`;
+    const summary = option?.dataset.summary || '';
+    const threadCount = option?.dataset.threadCount || '';
+    const meta = threadCount ? `spans ${threadCount} threads` : '';
+    els.threadScopeSummary.textContent = summary ? (meta ? `${summary}\n${meta}` : summary) : meta;
+  } else if (scope.type === 'thread') {
     els.askLabel.textContent = 'Ask about this thread';
-    els.question.placeholder = `What do you want to know about ${selected}?`;
-    const summary = option.dataset.summary || '';
-    const entries = option.dataset.entries || '';
-    const updated = option.dataset.updated || '';
+    els.question.placeholder = `What do you want to know about ${scope.slug}?`;
+    const summary = option?.dataset.summary || '';
+    const entries = option?.dataset.entries || '';
+    const updated = option?.dataset.updated || '';
     const entriesPart = entries ? `${entries} entr${entries === '1' ? 'y' : 'ies'}` : '';
     const updatedPart = updated ? `updated ${updated}` : '';
     const meta = [entriesPart, updatedPart].filter(Boolean).join(' · ');
-    els.threadScopeSummary.textContent = summary
-      ? (meta ? `${summary}\n${meta}` : summary)
-      : meta;
+    els.threadScopeSummary.textContent = summary ? (meta ? `${summary}\n${meta}` : summary) : meta;
   } else {
     els.askLabel.textContent = 'Ask your notes';
     els.question.placeholder = 'What do you want to know?';
     els.threadScopeSummary.textContent = '';
   }
 
-  // Clear any existing answer since it was for a different scope.
   if (currentAnswerState === 'content' || currentAnswerState === 'error') {
     setAnswerState('empty');
   }
@@ -545,9 +595,8 @@ const QUICK_QUERY_PROMPTS = {
 };
 
 function getActiveScope() {
-  const selected = els.askThread.value;
-  if (!selected || selected === '__all__') return null; // null = corpus-wide
-  return selected;
+  const scope = parseScope(els.askThread.value);
+  return scope; // { type: 'all'|'thread'|'concept', slug: string|null }
 }
 
 async function handleAsk(questionOverride) {
@@ -561,7 +610,7 @@ async function handleAsk(questionOverride) {
     els.question.value = questionOverride;
   }
 
-  const scopeSlug = getActiveScope();
+  const scope = getActiveScope();
 
   setAnswerState('loading');
   els.askSubmit.disabled = true;
@@ -569,7 +618,21 @@ async function handleAsk(questionOverride) {
 
   try {
     const payload = { op: 'ask', question };
-    if (scopeSlug) payload.thread = scopeSlug;
+    if (scope.type === 'thread' && scope.slug) {
+      payload.thread = scope.slug;
+    } else if (scope.type === 'concept' && scope.slug) {
+      // For concept-scoped queries, we load the concept page content and
+      // include it as additional context in a corpus-wide query.
+      // The concept page already synthesizes cross-thread knowledge.
+      try {
+        const conceptData = await callBridge({ op: 'read-concept', slug: scope.slug });
+        if (conceptData && conceptData.ok && conceptData.body) {
+          payload.question = `About the concept "${scope.slug}": ${question}\n\nCONCEPT PAGE CONTENT:\n${conceptData.body}`;
+        }
+      } catch (err) {
+        console.error('Vibenote: failed to load concept for scoped ask', err);
+      }
+    }
 
     const response = await callBridge(payload, 60000);
 
@@ -598,7 +661,8 @@ function handleQuickQuery(btn) {
   const prompts = QUICK_QUERY_PROMPTS[type];
   if (!prompts) return;
   const scopeSlug = getActiveScope();
-  const prompt = scopeSlug ? prompts.thread : prompts.all;
+  const scope = getActiveScope();
+  const prompt = scope.type === 'thread' ? prompts.thread : prompts.all;
   handleAsk(prompt);
 }
 
@@ -667,7 +731,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   await loadCurrentTab();
   currentDraftUrl = els.url.dataset.fullUrl || '';
   await loadPing();
-  await loadThreads();
+  await loadConcepts();
+  await loadThreads(); // calls populateAskThread which now includes concepts
   await restoreDraft();
   els.content.focus();
 })();

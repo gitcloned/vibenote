@@ -711,6 +711,53 @@ def insert_wikilinks(concepts_data):
             f.write_text("\n".join(new_lines))
 
 
+def handle_read_concept(payload):
+    """Read a concept page and return its parsed content."""
+    slug = (payload.get("slug") or "").strip()
+    if not slug:
+        return {"ok": False, "error": "No concept slug provided."}
+
+    path = CONCEPTS_DIR / f"{slug}.md"
+    if not path.exists():
+        return {"ok": False, "error": f"Concept not found: {slug}"}
+
+    text = path.read_text()
+
+    # Parse frontmatter
+    meta = {}
+    in_fm = False
+    fm_end = 0
+    for i, line in enumerate(text.splitlines()):
+        if line.strip() == "---":
+            if in_fm:
+                fm_end = i + 1
+                break
+            in_fm = True
+            continue
+        if in_fm and ":" in line and not line.startswith("  "):
+            key, _, val = line.partition(":")
+            meta[key.strip()] = val.strip()
+
+    # Extract the body (everything after frontmatter)
+    body_lines = text.splitlines()[fm_end:]
+    body = "\n".join(body_lines).strip()
+
+    # Update last_accessed
+    ts = now_iso()
+    updated_text = re.sub(r"^last_accessed:.*$", f"last_accessed: {ts}", text, count=1, flags=re.MULTILINE)
+    if updated_text != text:
+        path.write_text(updated_text)
+
+    return {
+        "ok": True,
+        "slug": slug,
+        "description": meta.get("description", ""),
+        "strength": float(meta.get("strength", "0")),
+        "state": meta.get("state", "active"),
+        "body": body,
+    }
+
+
 def handle_list_threads():
     return {"ok": True, "threads": read_index()}
 
@@ -1190,6 +1237,10 @@ def main():
         elif op == "list-concepts":
             result = handle_list_concepts()
             log_usage(op, concept_count=len(result.get("concepts", [])))
+            send_message(result)
+        elif op == "read-concept":
+            result = handle_read_concept(msg)
+            log_usage(op, scope=f"concept:{msg.get('slug', '')}")
             send_message(result)
         elif op == "process-concepts":
             result = handle_process_concepts(msg)
