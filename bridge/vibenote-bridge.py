@@ -474,6 +474,60 @@ Return ONLY a valid JSON array (no markdown fences, no explanation):
     return valid
 
 
+def linkify_citations(text):
+    """
+    Post-process concept page text to convert plain-text journal citations
+    into clickable Obsidian wikilinks.
+
+    (thread-slug, YYYY-MM-DD) → ([[thread-slug#full-timestamp|thread-slug, Mon DD]])
+
+    Looks up the actual journal entry timestamp from the thread file to get
+    the exact heading for Obsidian's #header link.
+    """
+    # Build a cache of thread → {date → full_timestamp}
+    timestamp_cache = {}
+
+    def get_timestamp(thread_slug, date_str):
+        if thread_slug not in timestamp_cache:
+            timestamp_cache[thread_slug] = {}
+            tpath = THREADS_DIR / f"{thread_slug}.md"
+            if tpath.exists():
+                for line in tpath.read_text().splitlines():
+                    if line.startswith("### ") and "T" in line[4:]:
+                        ts = line[4:].strip()
+                        day = ts[:10]
+                        timestamp_cache[thread_slug][day] = ts
+        return timestamp_cache.get(thread_slug, {}).get(date_str)
+
+    def format_date_short(date_str):
+        """YYYY-MM-DD → Mon DD"""
+        try:
+            months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            parts = date_str.split("-")
+            return f"{months[int(parts[1]) - 1]} {int(parts[2])}"
+        except Exception:
+            return date_str
+
+    def replace_citation(match):
+        slug = match.group(1)
+        date = match.group(2)
+        full_ts = get_timestamp(slug, date)
+        short_date = format_date_short(date)
+        if full_ts:
+            return f"([[{slug}#{full_ts}|{slug}, {short_date}]])"
+        else:
+            # No exact timestamp found — link to the thread file at least
+            return f"([[{slug}|{slug}, {short_date}]])"
+
+    # Match patterns like (thread-slug, 2026-04-02) — allowing hyphens in slug
+    return re.sub(
+        r"\(([a-z0-9][a-z0-9-]*),\s*(\d{4}-\d{2}-\d{2})\)",
+        replace_citation,
+        text,
+    )
+
+
 def generate_concept_page(concept, notes, claude_bin, claude_dir, timeout=45, concepts_data_context=None):
     """
     Generate a full concept page for a single concept.
@@ -572,6 +626,10 @@ List the specific journal entries this page draws from. Format:
     raw = run_claude(prompt, claude_bin, claude_dir, timeout)
     if not raw:
         return None
+
+    # Post-process: convert plain-text citations to Obsidian wikilinks.
+    # Pattern: (thread-slug, YYYY-MM-DD) → ([[thread-slug#full-timestamp|thread-slug, Mon DD]])
+    raw = linkify_citations(raw)
 
     # Compute strength
     strength = compute_strength(concept, notes)
