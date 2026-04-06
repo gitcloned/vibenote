@@ -474,10 +474,11 @@ Return ONLY a valid JSON array (no markdown fences, no explanation):
     return valid
 
 
-def generate_concept_page(concept, notes, claude_bin, claude_dir, timeout=45):
+def generate_concept_page(concept, notes, claude_bin, claude_dir, timeout=45, concepts_data_context=None):
     """
     Generate a full concept page for a single concept.
     Returns the markdown string to write to the concept file.
+    concepts_data_context: the full list of extracted concepts (for strict linking).
     """
     slug = concept["slug"]
     title = concept.get("title", slug)
@@ -492,7 +493,47 @@ def generate_concept_page(concept, notes, claude_bin, claude_dir, timeout=45):
         for n in notes if n["slug"] in threads
     )
 
-    prompt = f"""You are generating a concept page for a personal knowledge base. This concept spans multiple threads. Your job is to SYNTHESIZE — not just list where the concept appears, but generate genuine understanding about how the concept manifests differently across the threads and what connections that reveals.
+    # Build a list of existing concept slugs so the Connections section only links to real pages.
+    existing_concepts = [
+        c.get("slug") for c in concepts_data_context
+        if c.get("slug") and c.get("slug") != slug
+    ] if concepts_data_context else []
+    existing_concepts_hint = ", ".join(existing_concepts) if existing_concepts else "(none yet)"
+
+    # Build journal entry references so the LLM can cite specific entries.
+    journal_refs = []
+    for n in notes:
+        if n["slug"] not in threads:
+            continue
+        thread_file = THREADS_DIR / f"{n['slug']}.md"
+        if not thread_file.exists():
+            continue
+        text = thread_file.read_text()
+        # Extract journal entry timestamps and first ~100 chars of each
+        in_journal = False
+        current_ts = None
+        current_preview = []
+        for line in text.splitlines():
+            if line.startswith("## Journal"):
+                in_journal = True
+                continue
+            if in_journal and line.startswith("### "):
+                if current_ts and current_preview:
+                    preview = " ".join(current_preview)[:150]
+                    journal_refs.append(f"- {n['slug']}, {current_ts[:10]}: {preview}")
+                current_ts = line[4:].strip()
+                current_preview = []
+            elif in_journal and current_ts and line.strip() and not line.startswith("**Source:"):
+                current_preview.append(line.strip())
+        if current_ts and current_preview:
+            preview = " ".join(current_preview)[:150]
+            journal_refs.append(f"- {n['slug']}, {current_ts[:10]}: {preview}")
+
+    journal_refs_block = "\n".join(journal_refs) if journal_refs else "(no journal entries available)"
+
+    prompt = f"""You are writing a concept page for someone's personal knowledge base. This concept connects multiple threads of their thinking. Your job: synthesize what they know into a page that sounds like it was written by a sharp, thoughtful friend — not an AI assistant.
+
+PERSONA: You're a friend who's been reading all their notes and just noticed something they missed. You think out loud. You make direct connections without hedging. You use "you" and "your." You don't say "both domains converge" — you say "this is the same problem showing up in two places." You're concise and opinionated. No filler, no academic framing, no "it appears that."
 
 CONCEPT: {title}
 DESCRIPTION: {description}
@@ -503,21 +544,30 @@ RELEVANT THREAD NOTES:
 
 {relevant_notes}
 
-Write the concept page body with these sections (markdown, no frontmatter — I'll add that separately):
+JOURNAL ENTRIES (cite specific entries using the format "(thread-slug, YYYY-MM-DD)"):
+
+{journal_refs_block}
+
+OTHER CONCEPTS THAT EXIST (only link to these — don't invent wikilinks to concepts that don't exist):
+{existing_concepts_hint}
+
+Write the concept page body with these sections (markdown, no frontmatter):
 
 ## What I know
-A synthesis (3-5 paragraphs) of what the user understands about this concept ACROSS all referencing threads. Not a thread-by-thread summary. A genuine multi-perspective synthesis that generates understanding neither thread provides alone. Highlight non-obvious connections.
+3-5 paragraphs synthesizing what YOU (the user) understand about this concept across your threads. Not a thread-by-thread summary — a genuine synthesis that generates connections neither thread makes alone. Write conversationally. Cite specific journal entries inline as (thread-slug, YYYY-MM-DD). Make bold connections. Say "this is basically the same thing as" when it is.
 
 ## Where it appears
-For each referencing thread, 1-2 sentences about HOW that thread discusses this concept — what angle, what context, what's specific to that thread's framing.
+For each thread, 1-2 sentences about what angle that thread takes on this concept.
 
 ## Open questions
-Questions about this concept that span threads or aren't answered in any single thread. These should be the kind of questions that only become visible when you see the concept from multiple angles.
+Questions that only become visible when you see this concept from multiple angles. Frame them as things the user might actually want to investigate next.
 
 ## Connections
-Related concepts (as [[wikilinks]]). Tensions or synergies with other ideas in the vault.
+ONLY link to concepts from this list: {existing_concepts_hint}. Format: [[slug|Display Name]]. If no existing concepts relate, write "No linked concepts yet — this will grow as your vault grows." Do NOT invent wikilinks to concepts that don't exist.
 
-Be concise. Write in the user's voice — calm, factual, no filler. Every sentence should earn its place."""
+## Sources
+List the specific journal entries this page draws from. Format:
+- thread-slug, YYYY-MM-DD — one-line summary of what that entry contributes"""
 
     raw = run_claude(prompt, claude_bin, claude_dir, timeout)
     if not raw:
@@ -726,7 +776,9 @@ def handle_process_concepts(payload):
             "concepts_updated": 0,
         }
 
-    # Step 3: Generate concept pages
+    # Step 3: Generate concept pages (use a longer timeout — page generation
+    # involves richer prompts with journal refs and persona instructions)
+    page_timeout = max(timeout, 90)
     CONCEPTS_DIR.mkdir(parents=True, exist_ok=True)
     generated = 0
     updated = 0
@@ -738,7 +790,10 @@ def handle_process_concepts(payload):
         is_new = not page_path.exists()
 
         # Generate the full concept page via LLM
-        page_content = generate_concept_page(concept, notes, claude_bin, claude_dir, timeout)
+        page_content = generate_concept_page(
+            concept, notes, claude_bin, claude_dir, page_timeout,
+            concepts_data_context=concepts_data,
+        )
         if page_content:
             page_path.write_text(page_content)
             if is_new:
