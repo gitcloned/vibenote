@@ -465,8 +465,8 @@ textarea:focus {
 
 .msg-user {
   align-self: flex-end;
-  background: var(--accent);
-  color: white;
+  background: var(--bg-subtle);
+  color: var(--fg);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md) var(--radius-md) 4px var(--radius-md);
   font-size: var(--text-sm);
@@ -508,28 +508,28 @@ textarea:focus {
 /* ---------- Per-item cards (chip responses only) ---------- */
 
 .msg-item {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-3);
-  margin: var(--space-2) 0;
+  background: none;
+  border: none;
+  border-left: 2px solid var(--border);
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+  margin: var(--space-3) 0;
 }
 
 .msg-item-highlight {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-left-color: var(--accent);
 }
 
 .msg-item-title {
   font-weight: 600;
   font-size: var(--text-sm);
-  margin-bottom: 2px;
+  line-height: 1.4;
+  margin-bottom: var(--space-1);
 }
 
 .msg-item-desc {
-  font-size: var(--text-xs);
-  color: var(--fg-muted);
-  line-height: 1.5;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  line-height: 1.6;
 }
 
 .msg-item-actions {

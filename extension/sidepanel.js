@@ -406,7 +406,7 @@ function renderMessage(msg, index) {
       if (item.desc) {
         const desc = document.createElement('div');
         desc.className = 'msg-item-desc';
-        desc.textContent = item.desc.slice(0, 200) + (item.desc.length > 200 ? '…' : '');
+        desc.innerHTML = renderMarkdown(item.desc);
         card.appendChild(desc);
       }
 
@@ -414,10 +414,10 @@ function renderMessage(msg, index) {
       const actions = document.createElement('div');
       actions.className = 'msg-item-actions';
       actions.appendChild(createItemAction('task', 'Task', () => {
-        sendChat(`Create a detailed task for: "${item.title}". Include context from my notes, acceptance criteria, and suggested approach.`);
+        sendChat(`Create a task definition for: "${item.title}"\n\nStructure with these sections:\n- **Context:** Background and relevant information from the notes\n- **Objective:** What needs to be accomplished\n- **Goal:** The desired end state\n- **Acceptance criteria:** How to know when it is done\n- **Suggested approach:** Step-by-step plan\n\nWrite in third person. Do not use "you" or "your" — this task may be shared with team members or other tools.`);
       }));
       actions.appendChild(createItemAction('deeper', 'Deeper', () => {
-        sendChat(`Explain "${item.title}" in more detail to help me take this further.`);
+        sendChat(`Explain "${item.title}" in more detail. What are the key considerations, potential approaches, and what would a good first step look like?`);
       }));
       actions.appendChild(createItemAction('copy', 'Copy', () => {
         navigator.clipboard.writeText(`${item.title}\n${item.desc}`);
