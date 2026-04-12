@@ -911,6 +911,28 @@ def handle_process_concepts(payload):
 
     regenerate_index()
 
+    # Track processing metadata for staleness detection
+    try:
+        total_entries = sum(
+            int(line.split(":")[1].strip())
+            for f in sorted(THREADS_DIR.glob("*.md"))
+            for line in f.read_text().splitlines()
+            if line.startswith("entry_count:")
+        )
+        processing_meta = {
+            "timestamp": now_iso(),
+            "threads_processed": len(notes),
+            "total_entries_at_processing": total_entries,
+            "concepts_generated": generated,
+            "concepts_updated": updated,
+            "concepts": [c.get("slug") for c in concepts_data],
+        }
+        (VIBENOTE_HOME / "meta" / "last-processed.json").write_text(
+            json.dumps(processing_meta, indent=2)
+        )
+    except Exception:
+        pass  # never let tracking break processing
+
     return {
         "ok": True,
         "message": f"Processed {len(concepts_data)} concepts ({generated} new, {updated} updated).",

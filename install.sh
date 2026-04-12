@@ -434,6 +434,7 @@ if [ -f "$VIBENOTE_HOME/bin/vibenote-mcp.py" ]; then
 fi
 
 # ─── Step 8: Version marker and welcome ──────────────────────────────
+echo "$VERSION" > "$VIBENOTE_HOME/VERSION"
 echo "$VERSION" > "$VIBENOTE_HOME/.last-install-version"
 
 FIRST_INSTALL=0

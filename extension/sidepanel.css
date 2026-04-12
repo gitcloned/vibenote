@@ -451,6 +451,18 @@ textarea:focus {
 .chat-empty-icon { font-size: 28px; opacity: 0.5; }
 .chat-empty-text { font-size: var(--text-sm); line-height: 1.5; max-width: 260px; }
 
+/* Clickable status (for connection fix) */
+.status.clickable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.status.clickable:hover {
+  opacity: 1;
+}
+
 /* ---------- Message bubbles ---------- */
 
 .msg {
@@ -798,7 +810,7 @@ footer {
 
 .status.connected {
   color: var(--success);
-  opacity: 0;
+  opacity: 1;
 }
 
 .status.connected .status-dot {

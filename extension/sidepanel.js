@@ -224,9 +224,41 @@ async function refreshForCurrentTab() {
 async function loadThreads() {
   try {
     const r = await callBridge({ op: 'list-threads' });
-    if (r && r.ok) { populateThreads(r.threads || []); setStatus('Connected', 'connected'); }
-    else setStatus('Bridge error', 'error');
-  } catch { setStatus('Not connected', 'error'); }
+    if (r && r.ok) {
+      populateThreads(r.threads || []);
+      setStatus('Connected', 'connected');
+      hideConnectionHelp();
+    } else {
+      setStatus('Bridge error', 'error');
+    }
+  } catch {
+    setStatus('Not connected', 'error');
+    showConnectionHelp();
+  }
+}
+
+function showConnectionHelp() {
+  // Make the status clickable — click copies the fix command
+  const extId = chrome.runtime.id;
+  const command = `bash ~/.vibenote/scripts/vn-link-extension.sh ${extId}`;
+
+  setStatus('Not connected — click to copy fix', 'error clickable');
+
+  els.status.title = command;
+  els.status.style.cursor = 'pointer';
+  els.status.onclick = () => {
+    navigator.clipboard.writeText(command);
+    setStatus('Copied ✓ paste in terminal, reload extension', 'success');
+    setTimeout(() => {
+      setStatus('Not connected — click to copy fix', 'error clickable');
+      els.status.style.cursor = 'pointer';
+    }, 3000);
+  };
+}
+
+function hideConnectionHelp() {
+  els.status.onclick = null;
+  els.status.style.cursor = '';
 }
 
 async function loadPing() {
