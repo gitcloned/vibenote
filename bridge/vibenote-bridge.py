@@ -1327,10 +1327,15 @@ def main():
             send_message(result)
         elif op == "ping":
             cfg = load_config()
+            version = ""
+            vf = VIBENOTE_HOME / "VERSION"
+            if vf.exists():
+                version = vf.read_text().strip()
             log_usage(op)
             send_message({
                 "ok": True,
                 "vault": str(VIBENOTE_HOME),
+                "version": version,
                 "claude_config_dir": expand_path(cfg["claude_config_dir"]),
             })
         else:

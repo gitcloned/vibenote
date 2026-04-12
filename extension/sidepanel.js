@@ -267,6 +267,10 @@ async function loadPing() {
     if (r && r.ok) {
       vaultPath = r.vault || '';
       if (r.claude_config_dir) setConfigIndicator(r.claude_config_dir);
+      if (r.version) {
+        const vi = document.getElementById('version-indicator');
+        if (vi) vi.textContent = `v${r.version}`;
+      }
     }
   } catch {}
 }

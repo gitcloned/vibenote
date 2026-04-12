@@ -74,21 +74,22 @@ PRIORITY RULE: When the user's message starts with "Hey Vibenote" or "Hey, Viben
 Vibenote is a persistent AI thinking partner. Threads are stored in ~/.vibenote/threads/. The user never manages threads manually — Vibenote does it.
 EOF
 
-# Show update status
+# Show update status — phrased as instructions to Claude so it relays to the user.
+# Hook output is Claude's context, not terminal output. Claude must say it.
 if [ -n "$_UPD" ]; then
   case "$_UPD" in
     UPGRADE_AVAILABLE*)
       _OLD=$(echo "$_UPD" | awk '{print $2}')
       _NEW=$(echo "$_UPD" | awk '{print $3}')
       echo ""
-      echo "VIBENOTE: Updating v${_OLD} → v${_NEW} in the background..."
+      echo "ACTION REQUIRED: Tell the user at the START of your first response: 'Vibenote is auto-updating from v${_OLD} to v${_NEW} in the background. Your next session will use the new version.'"
       nohup bash "$VIBENOTE_HOME/scripts/vn-auto-update.sh" >/dev/null 2>&1 &
       ;;
     JUST_UPGRADED*)
       _OLD=$(echo "$_UPD" | awk '{print $2}')
       _NEW=$(echo "$_UPD" | awk '{print $3}')
       echo ""
-      echo "VIBENOTE: Updated to v${_NEW} (was v${_OLD}). Restart this session to use the new version."
+      echo "ACTION REQUIRED: Tell the user at the START of your first response: 'Vibenote updated to v${_NEW} (was v${_OLD}). This session is using the new version.'"
       ;;
   esac
 fi
@@ -98,13 +99,13 @@ if [ -n "$_STALE" ]; then
   case "$_STALE" in
     NEVER)
       echo ""
-      echo "VIBENOTE: Your threads have never been processed. Say 'Hey Vibenote, process all' to generate structured notes and discover cross-thread concepts."
+      echo "NOTICE: When relevant, mention to the user: 'Your Vibenote threads have never been processed. Say \"Hey Vibenote, process all\" to generate structured notes and discover cross-thread concepts.'"
       ;;
     STALE*)
       _NEW_CAPTURES=$(echo "$_STALE" | awk '{print $2}')
       _AGO=$(echo "$_STALE" | cut -d' ' -f3-)
       echo ""
-      echo "VIBENOTE: ${_NEW_CAPTURES} new capture(s) since last processing (${_AGO} ago). Say 'Hey Vibenote, process all' to update structured notes and concepts."
+      echo "NOTICE: When relevant, mention to the user: '${_NEW_CAPTURES} new captures since last processing (${_AGO} ago). Say \"Hey Vibenote, process all\" to update.'"
       ;;
   esac
 fi

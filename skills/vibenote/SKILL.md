@@ -165,13 +165,14 @@ This is the one place Vibenote stops being a pure logger and does synthesis work
 
 ### Procedure
 
-1. **Identify target thread(s)** — from the user's phrasing, find the slug. For "process all", read `~/.vibenote/meta/index.md` and process each thread that has journal entries.
-2. **Read the thread file:** `cat ~/.vibenote/threads/<slug>.md`
-3. **Classify the archetype** using the heuristic below. Look only at the journal — the existing structured note (if any) is irrelevant.
-4. **Check for existing concepts.** Run: `ls ~/.vibenote/concepts/*.md 2>/dev/null | grep -v index.md` — if concept pages exist, read their slugs and titles. These should be referenced as `[[slug|Title]]` wikilinks in the structured note wherever the concept is relevant.
-5. **Generate the structured note** using the template for that archetype. Synthesize across all entries; do not summarize entry-by-entry. **Cite specific journal entries** as `(YYYY-MM-DD)` when referencing a specific capture. **Reference existing concepts** as `[[concept-slug|Concept Title]]` wikilinks inline where they appear naturally in the text — do not append them as a separate list. Write in a human voice: direct, conversational, uses "you" and "your," no hedging.
-6. **Update the thread description.** Read the current `description:` field in the frontmatter. If the thread's content has evolved since the description was written, update it to accurately reflect what the thread is about now (one sentence). This keeps the description fresh for capture classification.
-7. **Rewrite the file** — replace only the `## Structured Note` section. Precisely: everything from the `## Structured Note` heading up to (but not including) the next `## ` heading (which will normally be `## My Notes`, or `## Journal` on older threads without a My Notes section). Leave the frontmatter (except updating `description` if needed), My Notes, and Journal exactly as they were. If the thread is missing a `## My Notes` section (old format), insert one immediately after the new Structured Note — use the placeholder `*Your space. Vibenote never touches this section — add your own annotations, corrections, or commentary here freely.*`
+1. **Check if processing is needed** (for "process all" only — skip this for single-thread processing). Read `~/.vibenote/meta/last-processed.json` if it exists. Count current total entries across all threads (sum of `entry_count` from each thread's frontmatter). If `total_entries_at_processing` in the file equals the current total AND the user did NOT say "reprocess", "force", or similar — respond: *"Nothing new to process — 0 captures since last processing (X ago). All threads and concepts are current."* and stop. If the user explicitly asks to reprocess/force, skip this check and proceed.
+2. **Identify target thread(s)** — from the user's phrasing, find the slug. For "process all", read `~/.vibenote/meta/index.md` and process each thread that has journal entries.
+3. **Read the thread file:** `cat ~/.vibenote/threads/<slug>.md`
+4. **Classify the archetype** using the heuristic below. Look only at the journal — the existing structured note (if any) is irrelevant.
+5. **Check for existing concepts.** Run: `ls ~/.vibenote/concepts/*.md 2>/dev/null | grep -v index.md` — if concept pages exist, read their slugs and titles. These should be referenced as `[[slug|Title]]` wikilinks in the structured note wherever the concept is relevant.
+6. **Generate the structured note** using the template for that archetype. Synthesize across all entries; do not summarize entry-by-entry. **Cite specific journal entries** as `(YYYY-MM-DD)` when referencing a specific capture. **Reference existing concepts** as `[[concept-slug|Concept Title]]` wikilinks inline where they appear naturally in the text — do not append them as a separate list. Write in a human voice: direct, conversational, uses "you" and "your," no hedging.
+7. **Update the thread description.** Read the current `description:` field in the frontmatter. If the thread's content has evolved since the description was written, update it to accurately reflect what the thread is about now (one sentence). This keeps the description fresh for capture classification.
+8. **Rewrite the file** — replace only the `## Structured Note` section. Precisely: everything from the `## Structured Note` heading up to (but not including) the next `## ` heading (which will normally be `## My Notes`, or `## Journal` on older threads without a My Notes section). Leave the frontmatter (except updating `description` if needed), My Notes, and Journal exactly as they were. If the thread is missing a `## My Notes` section (old format), insert one immediately after the new Structured Note — use the placeholder `*Your space. Vibenote never touches this section — add your own annotations, corrections, or commentary here freely.*`
 6. **Respond in 1-2 lines** — state which thread(s) were processed and which archetype was used. No commentary on the content.
 
 ### Classification heuristic
@@ -247,9 +248,36 @@ Edge case: fewer than 2 entries or total journal under ~200 words. Skip rich syn
 **Recent state:** <snapshot from the most recent 2-3 entries>
 ```
 
-### After processing
+### After processing threads
 
-Update the thread's `updated` timestamp in frontmatter? **No.** Processing does not count as an update to the thread's content. Leave `updated` and `entry_count` unchanged. Then run `bash ~/.vibenote/scripts/vn-update-index.sh` only if index needs refresh (generally it won't).
+Processing does not count as a content update. Leave `updated` and `entry_count` unchanged in frontmatter.
+
+### Then: generate concepts
+
+After all threads are processed, trigger concept extraction by sending a `process-concepts` operation to the bridge. Run:
+
+```bash
+python3 -c "
+import struct, json, subprocess
+msg = json.dumps({'op': 'process-concepts'}).encode()
+r = subprocess.run(
+    ['$HOME/.vibenote/bin/vibenote-bridge.py'],
+    input=struct.pack('<I', len(msg)) + msg,
+    capture_output=True, timeout=300)
+if len(r.stdout) > 4:
+    length = struct.unpack('<I', r.stdout[:4])[0]
+    resp = json.loads(r.stdout[4:4+length])
+    print(resp.get('message', 'done'))
+"
+```
+
+This extracts cross-thread concepts, generates concept cards, inserts wikilinks into structured notes, and writes `~/.vibenote/meta/last-processed.json` for staleness tracking.
+
+Then run `bash ~/.vibenote/scripts/vn-update-index.sh` to refresh the index.
+
+### Respond
+
+Respond in 1-2 lines — state which thread(s) were processed, which archetype was used, and how many concepts were generated/updated. No commentary on the content.
 
 ---
 
