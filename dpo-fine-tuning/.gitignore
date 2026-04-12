@@ -1,0 +1,17 @@
+# Model weights (large files — store on Google Drive)
+fluento-merged/
+fluento-merged-fp16/
+fluento-mlx-4bit/
+
+# Secrets
+fluento-firebase-secrets.json
+*.json.key
+.env
+
+# Python env
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fluento Eval — Stats</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #f7f7f8;
+    color: #1a1a1a;
+    min-height: 100vh;
+  }
+  .container { max-width: 860px; margin: 0 auto; padding: 24px 16px; }
+
+  /* Nav */
+  .nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+  }
+  .nav a {
+    font-size: 13px;
+    color: #4f46e5;
+    text-decoration: none;
+    font-weight: 500;
+  }
+  .nav a:hover { text-decoration: underline; }
+  .nav-title { font-size: 18px; font-weight: 700; }
+  .last-updated { font-size: 12px; color: #aaa; }
+
+  /* Auth wall */
+  .auth-wall {
+    text-align: center;
+    padding: 64px 24px;
+  }
+  .auth-wall p { color: #666; margin-bottom: 20px; }
+  .btn-google {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 28px;
+    background: #fff;
+    border: 1px solid #dadce0;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    color: #3c4043;
+    transition: box-shadow 0.15s, background 0.15s;
+  }
+  .btn-google:hover { box-shadow: 0 1px 3px rgba(0,0,0,0.1); background: #f8f9fa; }
+  .btn-google svg { width: 20px; height: 20px; }
+
+  /* Summary cards */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+  @media (max-width: 600px) { .summary-grid { grid-template-columns: repeat(2, 1fr); } }
+  .summary-card {
+    background: #fff;
+    border: 1px solid #e5e5e5;
+    border-radius: 12px;
+    padding: 16px 20px;
+  }
+  .summary-card .num {
+    font-size: 28px;
+    font-weight: 700;
+    color: #4f46e5;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .summary-card .lbl { font-size: 12px; color: #888; }
+
+  /* Section */
+  .section {
+    background: #fff;
+    border: 1px solid #e5e5e5;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .section-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #333;
+    margin-bottom: 16px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 2px solid #e5e5e5;
+    font-weight: 600;
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #fafafa; }
+
+  /* Win rate bar */
+  .bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .bar-track {
+    flex: 1;
+    height: 8px;
+    background: #e5e5e5;
+    border-radius: 4px;
+    overflow: hidden;
+    min-width: 60px;
+  }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+  .bar-fill-primary { background: #4f46e5; }
+  .bar-fill-green { background: #22c55e; }
+  .bar-fill-yellow { background: #eab308; }
+  .bar-pct { font-size: 13px; font-weight: 600; min-width: 36px; text-align: right; }
+
+  /* Rank badge */
+  .rank { font-weight: 700; color: #888; width: 24px; display: inline-block; }
+  .rank-1 { color: #f59e0b; }
+  .rank-2 { color: #94a3b8; }
+  .rank-3 { color: #cd7c2f; }
+
+  /* Level pills */
+  .pill {
+    display: inline-block;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .pill-beginner { background: #dcfce7; color: #166534; }
+  .pill-intermediate { background: #fef3c7; color: #92400e; }
+  .pill-advanced { background: #fce7f3; color: #9d174d; }
+
+  /* Winner chip */
+  .winner-chip {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 100px;
+    font-weight: 600;
+    background: #ede9fe;
+    color: #4f46e5;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .winner-chip.tie { background: #f3f4f6; color: #6b7280; }
+
+  /* Level breakdown mini-bars */
+  .level-bars { display: flex; flex-direction: column; gap: 6px; }
+  .level-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .level-label { width: 90px; color: #666; }
+
+  /* Activity feed */
+  .feed-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 13px;
+  }
+  .feed-item:last-child { border-bottom: none; }
+  .feed-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #e0e7ff;
+    color: #4f46e5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .feed-content { flex: 1; min-width: 0; }
+  .feed-user { font-weight: 600; color: #333; }
+  .feed-prompt {
+    color: #666;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-top: 2px;
+  }
+  .feed-time { font-size: 11px; color: #aaa; margin-top: 2px; }
+
+  /* User row */
+  .user-avatar-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .avatar-circle {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #e0e7ff;
+    color: #4f46e5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .loading { text-align: center; padding: 48px; color: #aaa; font-size: 14px; }
+  .empty { text-align: center; padding: 32px; color: #aaa; font-size: 13px; }
+
+  /* Coverage bar */
+  .coverage-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+  }
+  .coverage-track {
+    flex: 1;
+    height: 10px;
+    background: #e5e5e5;
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .coverage-fill { height: 100%; background: #4f46e5; border-radius: 5px; transition: width 0.4s; }
+  .coverage-label { font-size: 12px; color: #888; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Auth wall -->
+  <div id="auth-wall" class="auth-wall">
+    <p>Sign in to view evaluation stats.</p>
+    <button class="btn-google" onclick="signIn()">
+      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      Sign in with Google
+    </button>
+  </div>
+
+  <!-- Main content -->
+  <div id="main" style="display:none;">
+    <div class="nav">
+      <a href="index.html">← Back to Eval</a>
+      <span class="nav-title">Stats Dashboard</span>
+      <span class="last-updated" id="last-updated"></span>
+    </div>
+
+    <div id="loading" class="loading">Loading stats...</div>
+
+    <div id="content" style="display:none;">
+
+      <!-- Summary -->
+      <div class="summary-grid">
+        <div class="summary-card">
+          <div class="num" id="s-total-votes">—</div>
+          <div class="lbl">Total Votes</div>
+        </div>
+        <div class="summary-card">
+          <div class="num" id="s-raters">—</div>
+          <div class="lbl">Raters</div>
+        </div>
+        <div class="summary-card">
+          <div class="num" id="s-pairs-rated">—</div>
+          <div class="lbl">Prompts Rated</div>
+        </div>
+        <div class="summary-card">
+          <div class="num" id="s-coverage">—</div>
+          <div class="lbl">Coverage</div>
+        </div>
+      </div>
+
+      <!-- Coverage bar -->
+      <div class="section" id="coverage-section" style="padding-bottom:16px;">
+        <div class="section-title">Dataset Coverage</div>
+        <div class="coverage-wrap">
+          <div class="coverage-track"><div class="coverage-fill" id="coverage-bar" style="width:0%"></div></div>
+          <span class="coverage-label" id="coverage-detail">0 / 0 prompts rated</span>
+        </div>
+      </div>
+
+      <!-- Model Rankings -->
+      <div class="section">
+        <div class="section-title">Model Rankings</div>
+        <div id="rankings-empty" class="empty" style="display:none;">No votes yet.</div>
+        <table id="rankings-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Model</th>
+              <th>Wins</th>
+              <th>Losses</th>
+              <th>Ties</th>
+              <th>Votes</th>
+              <th>Win Rate</th>
+            </tr>
+          </thead>
+          <tbody id="rankings-body"></tbody>
+        </table>
+      </div>
+
+      <!-- Win Rate by Level -->
+      <div class="section">
+        <div class="section-title">Win Rate by Level</div>
+        <div id="level-empty" class="empty" style="display:none;">No votes yet.</div>
+        <table id="level-table">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Beginner</th>
+              <th>Intermediate</th>
+              <th>Advanced</th>
+            </tr>
+          </thead>
+          <tbody id="level-body"></tbody>
+        </table>
+      </div>
+
+      <!-- Users -->
+      <div class="section">
+        <div class="section-title">Raters</div>
+        <div id="users-empty" class="empty" style="display:none;">No raters yet.</div>
+        <table id="users-table">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Votes</th>
+              <th>Favourite Model</th>
+              <th>Last Active</th>
+            </tr>
+          </thead>
+          <tbody id="users-body"></tbody>
+        </table>
+      </div>
+
+      <!-- Recent Activity -->
+      <div class="section">
+        <div class="section-title">Recent Activity</div>
+        <div id="feed-empty" class="empty" style="display:none;">No activity yet.</div>
+        <div id="feed"></div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
+import {
+  getAuth, signInWithPopup, onAuthStateChanged, GoogleAuthProvider
+} from "https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js";
+import {
+  getFirestore, collection, getDocs, onSnapshot, query, orderBy, limit
+} from "https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBheeIHoFXBB4gg0UmEgV2rVJveZb2fj9A",
+  authDomain: "fluento-eval.firebaseapp.com",
+  projectId: "fluento-eval",
+  storageBucket: "fluento-eval.firebasestorage.app",
+  messagingSenderId: "810533644784",
+  appId: "1:810533644784:web:d2e403c7b89e2383629535"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const provider = new GoogleAuthProvider();
+
+window.signIn = async () => {
+  try { await signInWithPopup(auth, provider); }
+  catch (e) { console.error(e); }
+};
+
+onAuthStateChanged(auth, user => {
+  if (user) {
+    document.getElementById('auth-wall').style.display = 'none';
+    document.getElementById('main').style.display = 'block';
+    startListening();
+  } else {
+    document.getElementById('auth-wall').style.display = 'block';
+    document.getElementById('main').style.display = 'none';
+  }
+});
+
+// ─── DATA ─────────────────────────────────────────────────────────────
+let totalPairs = 0;
+
+async function loadPairCount() {
+  const snap = await getDocs(collection(db, 'eval_pairs'));
+  totalPairs = snap.size;
+}
+
+function startListening() {
+  loadPairCount();
+
+  // Live listener on all ratings
+  onSnapshot(collection(db, 'ratings'), snap => {
+    const ratings = snap.docs.map(d => d.data());
+    renderAll(ratings);
+    document.getElementById('last-updated').textContent =
+      'Updated ' + new Date().toLocaleTimeString();
+  });
+}
+
+// ─── RENDER ───────────────────────────────────────────────────────────
+function renderAll(ratings) {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+
+  renderSummary(ratings);
+  renderRankings(ratings);
+  renderLevelBreakdown(ratings);
+  renderUsers(ratings);
+  renderFeed(ratings);
+}
+
+// Summary cards
+function renderSummary(ratings) {
+  const totalVotes = ratings.length;
+  const raters = new Set(ratings.map(r => r.user_id)).size;
+  const pairsRated = new Set(ratings.map(r => r.pair_id)).size;
+  const coverage = totalPairs > 0 ? Math.round((pairsRated / totalPairs) * 100) : 0;
+
+  document.getElementById('s-total-votes').textContent = totalVotes.toLocaleString();
+  document.getElementById('s-raters').textContent = raters;
+  document.getElementById('s-pairs-rated').textContent = pairsRated;
+  document.getElementById('s-coverage').textContent = coverage + '%';
+
+  document.getElementById('coverage-bar').style.width = coverage + '%';
+  document.getElementById('coverage-detail').textContent =
+    `${pairsRated.toLocaleString()} / ${totalPairs.toLocaleString()} prompts rated`;
+}
+
+// Model rankings
+function renderRankings(ratings) {
+  const stats = {};
+
+  ratings.forEach(r => {
+    const models = [r.model_a_name, r.model_b_name].filter(Boolean);
+    models.forEach(m => {
+      if (!stats[m]) stats[m] = { wins: 0, losses: 0, ties: 0 };
+    });
+    if (r.winner === 'tie') {
+      models.forEach(m => stats[m].ties++);
+    } else if (r.winner === 'none') {
+      models.forEach(m => { if (stats[m]) stats[m].losses++; });
+    } else if (stats[r.winner]) {
+      stats[r.winner].wins++;
+      const loser = models.find(m => m !== r.winner);
+      if (loser && stats[loser]) stats[loser].losses++;
+    }
+  });
+
+  const sorted = Object.entries(stats).sort((a, b) => {
+    const aT = a[1].wins + a[1].losses + a[1].ties;
+    const bT = b[1].wins + b[1].losses + b[1].ties;
+    return (bT > 0 ? b[1].wins / bT : 0) - (aT > 0 ? a[1].wins / aT : 0);
+  });
+
+  const tbody = document.getElementById('rankings-body');
+  tbody.innerHTML = '';
+
+  if (sorted.length === 0) {
+    document.getElementById('rankings-table').style.display = 'none';
+    document.getElementById('rankings-empty').style.display = 'block';
+    return;
+  }
+
+  sorted.forEach(([name, s], i) => {
+    const total = s.wins + s.losses + s.ties;
+    const rate = total > 0 ? Math.round((s.wins / total) * 100) : 0;
+    const rankClass = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : '';
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="rank ${rankClass}">${medal}</span></td>
+      <td><strong>${esc(name)}</strong></td>
+      <td>${s.wins}</td>
+      <td>${s.losses}</td>
+      <td>${s.ties}</td>
+      <td>${total}</td>
+      <td>
+        <div class="bar-wrap">
+          <div class="bar-track"><div class="bar-fill bar-fill-primary" style="width:${rate}%"></div></div>
+          <span class="bar-pct">${rate}%</span>
+        </div>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// Level breakdown
+function renderLevelBreakdown(ratings) {
+  const levels = ['beginner', 'intermediate', 'advanced'];
+  const modelLevel = {}; // model → level → {wins, total}
+
+  ratings.forEach(r => {
+    const lvl = (r.level || '').toLowerCase();
+    const models = [r.model_a_name, r.model_b_name].filter(Boolean);
+    models.forEach(m => {
+      if (!modelLevel[m]) modelLevel[m] = {};
+      if (!modelLevel[m][lvl]) modelLevel[m][lvl] = { wins: 0, total: 0 };
+      modelLevel[m][lvl].total++;
+    });
+    if (r.winner !== 'tie' && modelLevel[r.winner] && lvl) {
+      if (!modelLevel[r.winner][lvl]) modelLevel[r.winner][lvl] = { wins: 0, total: 0 };
+      modelLevel[r.winner][lvl].wins++;
+    }
+  });
+
+  const models = Object.keys(modelLevel);
+  const tbody = document.getElementById('level-body');
+  tbody.innerHTML = '';
+
+  if (models.length === 0) {
+    document.getElementById('level-table').style.display = 'none';
+    document.getElementById('level-empty').style.display = 'block';
+    return;
+  }
+
+  models.forEach(name => {
+    const tr = document.createElement('tr');
+    const cells = levels.map(lvl => {
+      const s = modelLevel[name][lvl] || { wins: 0, total: 0 };
+      if (s.total === 0) return `<td><span style="color:#ccc">—</span></td>`;
+      const rate = Math.round((s.wins / s.total) * 100);
+      const color = rate >= 55 ? 'bar-fill-green' : rate >= 45 ? 'bar-fill-primary' : 'bar-fill-yellow';
+      return `<td>
+        <div class="bar-wrap">
+          <div class="bar-track" style="min-width:50px"><div class="bar-fill ${color}" style="width:${rate}%"></div></div>
+          <span class="bar-pct" style="font-size:12px">${rate}%</span>
+        </div>
+        <div style="font-size:10px;color:#aaa;margin-top:2px">${s.wins}W / ${s.total - s.wins}L</div>
+      </td>`;
+    });
+    tr.innerHTML = `<td><strong>${esc(name)}</strong></td>` + cells.join('');
+    tbody.appendChild(tr);
+  });
+}
+
+// Users
+function renderUsers(ratings) {
+  const userMap = {};
+
+  ratings.forEach(r => {
+    const uid = r.user_id;
+    if (!userMap[uid]) {
+      userMap[uid] = {
+        name: r.user_name || r.user_email || uid,
+        email: r.user_email || '',
+        votes: 0,
+        modelVotes: {},
+        lastTs: null,
+      };
+    }
+    userMap[uid].votes++;
+    if (r.winner && r.winner !== 'tie') {
+      userMap[uid].modelVotes[r.winner] = (userMap[uid].modelVotes[r.winner] || 0) + 1;
+    }
+    const ts = r.timestamp ? new Date(r.timestamp) : null;
+    if (ts && (!userMap[uid].lastTs || ts > userMap[uid].lastTs)) {
+      userMap[uid].lastTs = ts;
+    }
+  });
+
+  const sorted = Object.values(userMap).sort((a, b) => b.votes - a.votes);
+  const tbody = document.getElementById('users-body');
+  tbody.innerHTML = '';
+
+  if (sorted.length === 0) {
+    document.getElementById('users-table').style.display = 'none';
+    document.getElementById('users-empty').style.display = 'block';
+    return;
+  }
+
+  sorted.forEach(u => {
+    const initials = (u.name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+    const favModel = Object.entries(u.modelVotes).sort((a, b) => b[1] - a[1])[0];
+    const favLabel = favModel ? favModel[0] : '—';
+    const lastSeen = u.lastTs ? timeAgo(u.lastTs) : '—';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>
+        <div class="user-avatar-cell">
+          <div class="avatar-circle">${esc(initials)}</div>
+          <div>
+            <div style="font-weight:600">${esc(u.name)}</div>
+            <div style="font-size:11px;color:#aaa">${esc(u.email)}</div>
+          </div>
+        </div>
+      </td>
+      <td><strong>${u.votes}</strong></td>
+      <td><span class="winner-chip" title="${esc(favLabel)}">${esc(favLabel)}</span></td>
+      <td style="font-size:12px;color:#888">${lastSeen}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// Recent activity feed
+function renderFeed(ratings) {
+  const sorted = [...ratings]
+    .filter(r => r.timestamp)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 25);
+
+  const feed = document.getElementById('feed');
+  feed.innerHTML = '';
+
+  if (sorted.length === 0) {
+    document.getElementById('feed-empty').style.display = 'block';
+    return;
+  }
+
+  sorted.forEach(r => {
+    const name = r.user_name || r.user_email || 'Someone';
+    const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+    const winner = r.winner === 'tie' ? 'Tie' : r.winner === 'none' ? 'Neither' : r.winner;
+    const levelPill = r.level
+      ? `<span class="pill pill-${r.level.toLowerCase()}">${r.level}</span>`
+      : '';
+    const chipClass = (r.winner === 'tie' || r.winner === 'none') ? 'winner-chip tie' : 'winner-chip';
+    const commentHtml = r.comment
+      ? `<div class="feed-prompt" style="color:#ef4444;font-style:italic">"${esc(r.comment)}"</div>`
+      : '';
+    const item = document.createElement('div');
+    item.className = 'feed-item';
+    item.innerHTML = `
+      <div class="feed-avatar">${esc(initials)}</div>
+      <div class="feed-content">
+        <div><span class="feed-user">${esc(name)}</span> voted &nbsp;<span class="${chipClass}">${esc(winner)}</span>&nbsp;${levelPill}</div>
+        <div class="feed-prompt">${esc(r.prompt || '')}</div>
+        ${commentHtml}
+        <div class="feed-time">${r.timestamp ? timeAgo(new Date(r.timestamp)) : ''}</div>
+      </div>
+    `;
+    feed.appendChild(item);
+  });
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function timeAgo(date) {
+  const secs = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (secs < 60) return 'just now';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+  if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+  return Math.floor(secs / 86400) + 'd ago';
+}
+</script>
+</body>
+</html>
